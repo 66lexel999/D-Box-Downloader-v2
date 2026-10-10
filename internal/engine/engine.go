@@ -64,12 +64,14 @@ type Engine struct {
 	rootCtx context.Context
 	wg      sync.WaitGroup
 
-	settingsMu       sync.Mutex        // guards cfg.DownloadDir / cfg.Categories / overrides / startWithWindows
+	settingsMu       sync.Mutex        // guards cfg.DownloadDir / cfg.Categories / overrides / startWithWindows / hideDone / auto
 	overrides        map[string]string // category -> remembered custom folder (persisted in settings.json)
 	defaultDir       string            // app-default base download folder, for Reset
 	startWithWindows *bool             // "start D BOX when Windows starts"; nil = never chosen (persisted)
 	dirChosen        bool              // the base folder came from settings.json or Options (not -dir / default)
 	concChosen       bool              // the simultaneous limit came from settings.json or Options
+	hideDone         bool              // "Don't show again" on the completion popup (persisted; Options turns it back on)
+	auto             autoDownload      // auto download: skip the New Download window (persisted; autodl.go)
 }
 
 // SetCompletionNotifier wires the native download-complete popup. Set in GUI
@@ -88,6 +90,30 @@ func (e *Engine) SuppressCompletionPopup(d time.Duration) {
 	e.mu.Unlock()
 }
 
+// DonePopupEnabled reports whether a finished download pops the completion
+// window (off after its "Don't show again"; Options turns it back on).
+func (e *Engine) DonePopupEnabled() bool {
+	e.settingsMu.Lock()
+	defer e.settingsMu.Unlock()
+	return !e.hideDone
+}
+
+// SetDonePopupEnabled turns the completion popup on or off for good (persisted).
+// Turning it on also ends a "don't show for 2 hours" pause.
+func (e *Engine) SetDonePopupEnabled(on bool) {
+	e.settingsMu.Lock()
+	if hide := !on; e.hideDone != hide {
+		e.hideDone = hide
+		e.saveSettingsLocked()
+	}
+	e.settingsMu.Unlock()
+	if on {
+		e.mu.Lock()
+		e.completionSuppressUntil = time.Time{}
+		e.mu.Unlock()
+	}
+}
+
 // GUIEnabled reports whether MyIDM is running as a native desktop app (vs a
 // headless server). The web UI uses this to avoid double completion popups.
 func (e *Engine) GUIEnabled() bool { return e.cfg.GUI }
@@ -100,7 +126,7 @@ func (e *Engine) notifyCompleted(id string) {
 	notifier := e.completionNotifier
 	suppressed := time.Now().Before(e.completionSuppressUntil)
 	e.mu.Unlock()
-	if notifier != nil && !suppressed {
+	if notifier != nil && !suppressed && e.DonePopupEnabled() {
 		notifier(id)
 	}
 }
@@ -823,6 +849,8 @@ type persistedSettings struct {
 	Categories       map[string]string `json:"categories,omitempty"`       // category -> remembered custom folder
 	MaxConcurrent    int               `json:"maxConcurrent,omitempty"`    // simultaneous downloads (0 = keep default)
 	StartWithWindows *bool             `json:"startWithWindows,omitempty"` // nil = never chosen
+	HideDonePopup    bool              `json:"hideDonePopup,omitempty"`    // completion popup turned off
+	AutoDownload     *autoDownload     `json:"autoDownload,omitempty"`     // nil = off
 }
 
 func (e *Engine) settingsPath() string { return filepath.Join(e.cfg.DataDir, "settings.json") }
@@ -849,6 +877,10 @@ func (e *Engine) loadSettings() {
 		e.concChosen = true
 	}
 	e.startWithWindows = s.StartWithWindows
+	e.hideDone = s.HideDonePopup
+	if s.AutoDownload != nil && s.AutoDownload.active(autoNow()) {
+		e.auto = *s.AutoDownload
+	}
 	e.cfg.Categories = config.DefaultCategories(e.cfg.DownloadDir)
 	e.overrides = map[string]string{}
 	for k, v := range s.Categories {
@@ -865,7 +897,11 @@ func (e *Engine) loadSettings() {
 // before or set in Options), so saving another setting never pins the -dir /
 // -concurrent values this launch happened to use.
 func (e *Engine) saveSettingsLocked() {
-	s := persistedSettings{Categories: e.overrides, StartWithWindows: e.startWithWindows}
+	s := persistedSettings{Categories: e.overrides, StartWithWindows: e.startWithWindows, HideDonePopup: e.hideDone}
+	if e.auto.active(autoNow()) {
+		a := e.auto
+		s.AutoDownload = &a
+	}
 	if e.dirChosen {
 		s.DownloadDir = e.cfg.DownloadDir
 	}

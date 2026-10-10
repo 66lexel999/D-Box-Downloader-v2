@@ -745,11 +745,20 @@ func detailNav(serverURL, id string) string {
 }
 
 // doneBind lets the completion popup's Close (myidmCloseDownload) also dismiss
-// the matching status window when both run in-process.
+// the matching status window when both run in-process, and tells the page
+// whether its window is the one in front (myidmIsActive): of several open
+// completion windows, the one the user is on offers "Close all".
 func doneBind(id string) func(webview.WebView) {
 	return func(w webview.WebView) {
 		w.Bind("myidmCloseDownload", func() { hideForClose(uintptr(w.Window())); CloseDetail(id); w.Terminate() })
+		w.Bind("myidmIsActive", func() bool { return isForeground(uintptr(w.Window())) })
 	}
+}
+
+// isForeground reports whether hwnd is the window the user is working in.
+func isForeground(hwnd uintptr) bool {
+	fg, _, _ := procGetForegroundWindow.Call()
+	return hwnd != 0 && fg == hwnd
 }
 
 // RunDialog/RunDone/RunDetail BLOCK (used by the separate-process -dialog/-done/
@@ -758,8 +767,12 @@ func doneBind(id string) func(webview.WebView) {
 // WebView2 main path uses: they reuse the main window's warm browser process
 // (fast) and let the main process coordinate the windows.
 
+// dialogW×dialogH is the New Download window's first-open size (DIPs); after
+// that it reopens at whatever size the user left it.
+const dialogW, dialogH = 520, 263
+
 func RunDialog(serverURL, query string) error {
-	return runPopup("Download File Info — D BOX", 429, 263, popupDataPath("dialog"), popupGeomDir("dialog"), dialogNav(serverURL, query), "", bindPickers)
+	return runPopup("Download File Info — D BOX", dialogW, dialogH, popupDataPath("dialog"), popupGeomDir("dialog"), dialogNav(serverURL, query), "", bindPickers)
 }
 func RunDone(serverURL, id string) error {
 	return runPopup("Download complete — D BOX", 327, 165, popupDataPath("done"), popupGeomDir("done"), doneNav(serverURL, id), "", doneBind(id))
@@ -770,7 +783,7 @@ func RunDetail(serverURL, id string) error {
 
 // OpenDialog opens the New Download window in-process (non-blocking).
 func OpenDialog(serverURL, query string) {
-	go runPopup("Download File Info — D BOX", 429, 263, popupWebviewData("dialog"), popupGeomDir("dialog"), dialogNav(serverURL, query), "", bindPickers)
+	go runPopup("Download File Info — D BOX", dialogW, dialogH, popupWebviewData("dialog"), popupGeomDir("dialog"), dialogNav(serverURL, query), "", bindPickers)
 }
 
 // OpenDone opens the completion window in-process (non-blocking).

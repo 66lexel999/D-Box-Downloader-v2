@@ -87,6 +87,8 @@ type Server struct {
 	closeMu      sync.Mutex       // guards popupCloseAt
 	popupCloseAt map[string]int64 // task id -> client wall-clock ms of the latest popup-close request
 
+	doneWins doneWindows // the open "Download complete" windows, for "Close all" (donewin.go)
+
 	ctxs ctxStore // browser context (referer/headers) handed from /api/prompt to the dialog
 
 	ui uiState // theme / zoom / text size shared by every window (uitheme.go)
@@ -463,6 +465,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /done", s.servePage(doneHTML))
 	mux.HandleFunc("GET /detail", s.servePage(detailHTML))
 	mux.HandleFunc("POST /api/done-suppress", s.handleDoneSuppress)
+	// The open completion windows keep count here, for their "Close all".
+	mux.HandleFunc("POST /api/done-windows/close-all", s.handleDoneWindowsCloseAll)
+	mux.HandleFunc("POST /api/done-windows/{key}", s.handleDoneWindowBeat)
+	mux.HandleFunc("DELETE /api/done-windows/{key}", s.handleDoneWindowGone)
 	mux.HandleFunc("POST /api/detail", s.handleOpenDetail)
 	mux.HandleFunc("POST /api/done", s.handleOpenDone)
 	// Popup close coordination: the completion + status windows for one download
@@ -481,6 +487,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/settings/ui", s.handleGetUISettings)
 	mux.HandleFunc("POST /api/settings/ui", s.handleSetUISettings)
 	mux.HandleFunc("POST /api/settings/startup", s.handleSetStartup)
+	mux.HandleFunc("POST /api/settings/done-popup", s.handleSetDonePopup)
+	// Auto download: skip the New Download window for a while (autodl.go).
+	mux.HandleFunc("GET /api/autodownload", s.handleGetAutoDownload)
+	mux.HandleFunc("POST /api/autodownload", s.handleSetAutoDownload)
 	mux.HandleFunc("POST /api/show", s.handleShow)
 	mux.HandleFunc("POST /api/pick-folder", s.handlePickFolder)
 	mux.HandleFunc("POST /api/quit", s.handleQuit)
@@ -645,7 +655,9 @@ func (s *Server) settingsView() map[string]any {
 	dir, cats, custom, def, maxc := s.eng.Settings()
 	v := map[string]any{"downloadDir": dir, "categories": cats, "custom": custom, "defaultDir": def,
 		"maxConcurrent": maxc, "shutdownWhenDone": s.eng.ShutdownWhenDone(),
-		"startWithWindowsSupported": s.startupGet != nil}
+		"startWithWindowsSupported": s.startupGet != nil,
+		"showDonePopup":             s.eng.DonePopupEnabled(),
+		"autoDownload":              s.eng.AutoDownloadState()}
 	if s.startupGet != nil {
 		on, err := s.startupGet()
 		if err != nil {
@@ -1326,8 +1338,10 @@ func (s *Server) handleSchedule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// handleList also reports the auto download state, so the main window's
+// status bar follows it from the same poll.
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"tasks": s.eng.List()})
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": s.eng.List(), "auto": s.eng.AutoDownloadState()})
 }
 
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
@@ -1420,12 +1434,19 @@ type promptRequest struct {
 	Ext      string `json:"ext,omitempty"`      // expected container (mp4 / mp3)
 	Audio    bool   `json:"audio,omitempty"`    // audio-only
 	Title    string `json:"title,omitempty"`    // video title / naming hint (page title)
+	// ExpectedMime is the type the browser expects (extension hand-offs): picks
+	// the category folder when auto download skips the window.
+	ExpectedMime string `json:"expectedMime,omitempty"`
+	// Ask shows the New Download window even while auto download is on
+	// (the main window's "Save As…").
+	Ask bool `json:"ask,omitempty"`
 	browserContext
 }
 
 // handlePrompt opens the native "New Download" window for url (GUI mode). The
 // response's "native" flag tells the caller (e.g. the browser extension)
-// whether MyIDM handled it or they should fall back to their own popup.
+// whether MyIDM handled it or they should fall back to their own popup. While
+// auto download is on, the download starts without the window ("auto": true).
 func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	var req promptRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1435,6 +1456,17 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.URL) == "" {
 		writeError(w, http.StatusBadRequest, "missing url")
 		return
+	}
+	if !req.Ask && s.eng.TakeAutoDownload() {
+		view, err := s.autoAdd(req)
+		if err == nil {
+			s.log.Info("auto download: started without the New Download window", "id", view.ID, "url", view.URL)
+			writeJSON(w, http.StatusOK, map[string]any{"native": true, "auto": true, "id": view.ID})
+			return
+		}
+		// Couldn't add it as is (a bad link, no yt-dlp): the window shows why.
+		s.eng.ReturnAutoDownload()
+		s.log.Warn("auto download: couldn't start, showing the window", "url", req.URL, "err", err)
 	}
 	if s.dialog == nil && !s.webMode {
 		writeJSON(w, http.StatusOK, map[string]any{"native": false})

@@ -72,6 +72,36 @@
 
   .buttons { display: flex; gap: 7px; justify-content: flex-end; padding-top: 8px; }
   .buttons .btn { padding: 5px 12px; }
+  .buttons .grow { flex: 1; }
+
+  /* right column under the file card: how many downloads run at once */
+  .side { flex: none; display: flex; flex-direction: column; gap: 8px; }
+  .maxc { display: flex; flex-direction: column; gap: 3px; color: var(--muted); font-size: 11px; cursor: default; }
+  .maxc .field { width: 88px; height: 25px; padding: 2px 6px; font-variant-numeric: tabular-nums; }
+
+  /* Auto download: the button (lit while it's on) and its small panel */
+  #auto .ic { line-height: 0; color: var(--yellow); }
+  #auto.on { border-color: var(--yellow); background: color-mix(in srgb, var(--yellow) 14%, transparent); }
+  @media (max-width: 490px) { #auto .more { display: none; } }  /* "Auto" … */
+  @media (max-width: 430px) { #auto .lbl { display: none; } }   /* … then the icon alone */
+  .ad-back { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 8px;
+    background: rgba(0, 0, 0, .4); }
+  .ad-back[hidden] { display: none; }
+  .ad { width: min(320px, 100%); max-height: 100%; overflow: auto; padding: 10px 13px 10px;
+    background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); }
+  .ad-head { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 650; color: var(--text-strong); }
+  .ad-head .ic { line-height: 0; color: var(--yellow); }
+  .ad-sub { color: var(--muted); font-size: 11px; margin: 2px 0 5px; }
+  .ad-state { color: var(--green); font-size: 11px; font-weight: 600; margin: -2px 0 5px; }
+  .ad-opt { display: flex; align-items: center; gap: 7px; min-height: 27px; cursor: pointer; white-space: nowrap; }
+  .ad-opt .field { width: 60px; height: 23px; padding: 2px 6px; font-variant-numeric: tabular-nums; }
+  .ad-opt .note { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+  .ad-err { color: var(--red); font-size: 11px; min-height: 0; }
+  .ad-err:not(:empty) { margin-top: 3px; }
+  .ad-btns { display: flex; gap: 7px; margin-top: 8px; }
+  .ad-btns .grow { flex: 1; }
+  .ad-btns .btn { padding: 5px 11px; }
+  .ad-btns .btn[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -106,10 +136,16 @@
       <input type="datetime-local" class="field" id="schedule" title="Optional: start this download at a set time (use Download Later / Schedule)">
     </div>
 
-    <div class="preview" id="preview">
-      <div class="art" id="glyph"></div>
-      <div class="size" id="size">…</div>
-      <div class="kind" id="kind"></div>
+    <div class="side">
+      <div class="preview" id="preview">
+        <div class="art" id="glyph"></div>
+        <div class="size" id="size">…</div>
+        <div class="kind" id="kind"></div>
+      </div>
+      <label class="maxc" title="How many downloads run at the same time — the rest wait in the queue. Same as Max at once in Options.">
+        Max at once
+        <input type="number" class="field" id="maxConc" min="1" max="16" step="1">
+      </label>
     </div>
   </div>
 
@@ -119,9 +155,32 @@
     <button type="button" class="btn" id="grabBtn" title="Open the Link Grabber with every file, video and link found on this page">Show everything on this page…</button>
   </div>
   <div class="buttons">
+    <button type="button" class="btn" id="auto"><span class="lbl">Auto<span class="more"> download</span></span></button>
+    <span class="grow"></span>
     <button class="btn" id="later">Download Later</button>
     <button class="btn primary" id="start">Start Download</button>
     <button class="btn" id="cancel">Cancel</button>
+  </div>
+
+  <!-- Auto download: skip this window for a while (the small panel over it). -->
+  <div class="ad-back" id="adBack" hidden>
+    <div class="ad" role="dialog" aria-modal="true" aria-labelledby="adTitle">
+      <div class="ad-head"><span class="ic" id="adIc"></span><span id="adTitle">Auto download</span></div>
+      <div class="ad-sub">Start new downloads right away, without this window:</div>
+      <div class="ad-state" id="adState" hidden></div>
+      <label class="ad-opt"><input type="radio" name="adMode" value="forever"> Forever <span class="note">— until you turn it off</span></label>
+      <label class="ad-opt"><input type="radio" name="adMode" value="minutes"> For
+        <input type="number" class="field" id="adMin" min="1" max="1440" step="1" aria-label="Minutes"> minutes</label>
+      <label class="ad-opt"><input type="radio" name="adMode" value="files"> For the next
+        <input type="number" class="field" id="adFiles" min="1" max="999" step="1" aria-label="Files"> files</label>
+      <div class="ad-err" id="adErr"></div>
+      <div class="ad-btns">
+        <button type="button" class="btn" id="adOff" hidden>Turn off</button>
+        <span class="grow"></span>
+        <button type="button" class="btn" id="adCancel">Cancel</button>
+        <button type="button" class="btn primary" id="adGo" title="Turn auto download on and start this download">Turn on &amp; start</button>
+      </div>
+    </div>
   </div>
 
 <script>
@@ -202,6 +261,8 @@ async function init(){
   $("later").insertAdjacentHTML("afterbegin", DBI.icon("ui-clock", 14));
   $("grabBtn").insertAdjacentHTML("afterbegin", DBI.icon("ui-list", 14));
   $("grabBtn").addEventListener("click", showEverything);
+  initAuto();
+  loadSettings(); // Max at once + whether auto download is on
   $("name").value = isVideo ? (vTitle || "video") : (qs.get("name") || (() => {
     try { return decodeURIComponent(new URL(url).pathname.split("/").pop() || "") || "download"; } catch { return "download"; }
   })());
@@ -251,8 +312,14 @@ async function init(){
   });
   $("cancel").addEventListener("click", closeDialog);
   document.addEventListener("keydown", (e) => {
+    if (!$("adBack").hidden) { // the Auto download panel takes the keys while it's up
+      if (e.key === "Escape") { e.preventDefault(); adClose(); }
+      else if (e.key === "Enter" && e.target.tagName !== "BUTTON") { e.preventDefault(); adGo(); }
+      return;
+    }
     if (e.key === "Escape") { closeDialog(); return; }
     if (e.key !== "Enter") return;
+    if (e.target.id === "maxConc") { e.target.blur(); return; } // Enter applies the number, it doesn't start
     // Enter on a button activates THAT button (don't also start the download —
     // Enter on Cancel used to submit anyway); Enter in the Schedule field means
     // "schedule it", not "start right now ignoring the time I just typed".
@@ -379,6 +446,114 @@ function fillQuality(opts){
     updatePreview();
   };
   sel.onchange = apply; apply();
+}
+
+// ---- Max at once + Auto download ------------------------------------------
+// Max at once is the Options setting, adjustable here: downloads beyond it
+// wait in the queue. Auto download skips this window for later downloads —
+// for good, for some minutes or for the next few files; D BOX keeps that
+// state (/api/autodownload), this window remembers the numbers last used.
+let autoState = { active: false };
+async function loadSettings(){
+  try {
+    const st = await (await fetch("/api/settings")).json();
+    if (st.maxConcurrent) $("maxConc").value = st.maxConcurrent;
+    if (st.autoDownload) { autoState = st.autoDownload; renderAutoBtn(); }
+  } catch(_) {}
+}
+async function setMaxConc(){
+  const el = $("maxConc"); let n = parseInt(el.value, 10);
+  if (!Number.isFinite(n)) { loadSettings(); return; }
+  n = Math.max(1, Math.min(16, n)); el.value = n;
+  try {
+    const r = await fetch("/api/settings/concurrent", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ n }) });
+    const d = await r.json();
+    if (r.ok && d.maxConcurrent) el.value = d.maxConcurrent;
+  } catch(_) {}
+}
+
+const AUTO_LAST = "dbox.auto.last"; // {mode, minutes, files} chosen last time
+function autoLast(){ try { return JSON.parse(localStorage.getItem(AUTO_LAST) || "{}") || {}; } catch(_) { return {}; } }
+function autoLeft(a){
+  if (!a || !a.active) return "";
+  if (a.mode === "files") return a.left + (a.left === 1 ? " file" : " files") + " left";
+  if (a.mode === "minutes") { const m = Math.max(1, Math.ceil((a.until - Date.now()) / 60000)); return m + " min left"; }
+  return "until you turn it off";
+}
+function renderAutoBtn(){
+  const b = $("auto");
+  b.classList.toggle("on", !!autoState.active);
+  b.title = autoState.active
+    ? "Auto download is on (" + autoLeft(autoState) + ") — click to change it or turn it off"
+    : "Auto download: start new downloads right away, without this window — for good, for some minutes, or for the next few files";
+}
+function initAuto(){
+  $("auto").insertAdjacentHTML("afterbegin", '<span class="ic">' + DBI.icon("ui-bolt", 14) + "</span>");
+  $("adIc").innerHTML = DBI.icon("ui-bolt", 16);
+  $("adGo").insertAdjacentHTML("afterbegin", DBI.icon("ui-bolt", 14));
+  renderAutoBtn();
+  $("auto").addEventListener("click", adOpen);
+  $("adCancel").addEventListener("click", adClose);
+  $("adGo").addEventListener("click", adGo);
+  $("adOff").addEventListener("click", adOff);
+  $("adBack").addEventListener("mousedown", (e) => { if (e.target === $("adBack")) adClose(); });
+  // Typing a number picks its option (clicking into the box doesn't tick the radio by itself).
+  for (const [id, mode] of [["adMin", "minutes"], ["adFiles", "files"]]) {
+    $(id).addEventListener("focus", () => { pickAutoMode(mode); $(id).select(); });
+    $(id).addEventListener("input", () => { $("adErr").textContent = ""; });
+  }
+  $("maxConc").addEventListener("change", setMaxConc);
+}
+function pickAutoMode(mode){ for (const r of document.querySelectorAll("input[name=adMode]")) r.checked = r.value === mode; }
+function autoMode(){ const r = document.querySelector("input[name=adMode]:checked"); return r ? r.value : "minutes"; }
+function adOpen(){
+  const last = autoLast();
+  $("adMin").value = last.minutes || 10;
+  $("adFiles").value = last.files || 10;
+  pickAutoMode(autoState.active ? autoState.mode : (last.mode || "minutes"));
+  $("adState").textContent = autoState.active ? "On now — " + autoLeft(autoState) : "";
+  $("adState").hidden = $("adOff").hidden = !autoState.active;
+  $("adErr").textContent = "";
+  $("adGo").disabled = false;
+  $("adBack").hidden = false;
+  const m = autoMode();
+  (m === "minutes" ? $("adMin") : m === "files" ? $("adFiles") : $("adGo")).focus();
+}
+function adClose(){ $("adBack").hidden = true; $("auto").focus(); }
+async function postAuto(mode, n){
+  const r = await fetch("/api/autodownload", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ mode, n }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || ("HTTP " + r.status));
+  autoState = d; renderAutoBtn();
+}
+// adGo turns auto download on with the chosen option and starts this download.
+async function adGo(){
+  if ($("adGo").disabled) return;
+  const mode = autoMode();
+  let n = 0;
+  if (mode !== "forever") {
+    const el = mode === "minutes" ? $("adMin") : $("adFiles");
+    n = Number(el.value);
+    if (!Number.isInteger(n) || n < +el.min || n > +el.max) {
+      $("adErr").textContent = "Enter a whole number from " + el.min + " to " + el.max + ".";
+      el.focus(); el.select();
+      return;
+    }
+  }
+  const last = autoLast(); last.mode = mode;
+  if (mode === "minutes") last.minutes = n; else if (mode === "files") last.files = n;
+  try { localStorage.setItem(AUTO_LAST, JSON.stringify(last)); } catch(_) {}
+  $("adGo").disabled = true;
+  try { await postAuto(mode, n); }
+  catch(e) { $("adGo").disabled = false; $("adErr").textContent = "Couldn't turn it on: " + (e.message || e); return; }
+  $("adBack").hidden = true;
+  submit(false); // this download starts now; the next ones skip the window
+}
+async function adOff(){
+  try { await postAuto("off", 0); } catch(e) { $("adErr").textContent = "Couldn't turn it off: " + (e.message || e); return; }
+  $("adBack").hidden = true;
+  if ($("msg").classList.contains("empty")) setMsg("Auto download is off — downloads show this window again.", "info");
+  $("start").focus();
 }
 
 async function submit(later){
