@@ -221,6 +221,13 @@
     background: var(--accent-soft); color: var(--text); font-size: .77rem; font-weight: 600; flex: none; }
   .sbchip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--green);
     animation: livepulse 1.4s ease-in-out infinite; }
+  /* auto download on: a bolt chip with its stop button */
+  .sbchip.auto { gap: 4px; padding-right: 3px; background: color-mix(in srgb, var(--yellow) 18%, transparent); }
+  .sbchip.auto::before { display: none; }
+  .sbchip.auto .ic { color: var(--yellow); line-height: 0; }
+  .sbchip.auto button { display: grid; place-items: center; width: 14px; height: 14px; padding: 0; border: 0;
+    border-radius: 50%; background: none; color: inherit; opacity: .65; cursor: pointer; }
+  .sbchip.auto button:hover { opacity: 1; background: var(--hover); }
   .statusbar .spd { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; flex: none;
     font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
 
@@ -436,6 +443,10 @@
 
   <div class="statusbar">
     <span id="sbLeft"></span><span class="sbchip" id="sbActive" hidden></span>
+    <span class="sbchip auto" id="sbAuto" hidden title="Auto download is on: new downloads start without the New Download window">
+      <span class="ic" data-ic="ui-bolt" data-sz="11"></span><span id="sbAutoT"></span>
+      <button type="button" id="sbAutoX" title="Turn auto download off" aria-label="Turn auto download off"><span data-ic="ui-close" data-sz="9"></span></button>
+    </span>
     <span class="spd" title="Total download speed"><span data-ic="ui-speed" data-sz="13"></span><span id="totalSpeed">0 B/s</span></span>
   </div>
 
@@ -452,10 +463,13 @@
       <button class="btn primary" id="dmOpen"><span data-ic="ui-open" data-sz="14"></span>Open file</button>
       <button class="btn" id="dmFolder"><span data-ic="ui-folder" data-sz="14"></span>Open folder</button>
       <button class="btn" id="dmClose">Close</button>
+      <button class="btn" id="dmCloseAll" hidden>Close all</button>
     </div>
     <div class="mfoot">
       <label><input type="checkbox" id="dmSuppress"> Don't show this for 2 hours</label>
       <span class="more" id="dmMore"></span>
+      <span class="spacer"></span>
+      <button class="btn ghost sm" id="dmNever" title="Stop showing this when a download finishes — turn it back on in Options"><span data-ic="ui-eye-off" data-sz="13"></span>Don't show again</button>
     </div>
   </div>
 </div>
@@ -568,6 +582,11 @@
         </label>
         <div class="hint">Opens quietly in the tray when you sign in, ready for downloads from your browser. Untick to start it only when you open it.</div>
       </div>
+      <label class="ocheck">
+        <input type="checkbox" id="optDonePopup">
+        <span>Show the “Download complete” window when a download finishes</span>
+      </label>
+      <div class="hint">Its “Don't show again” turns this off — tick it to see the window again.</div>
       <label class="ocheck">
         <input type="checkbox" id="optShutdown">
         <span>Turn off the PC when all downloads finish</span>
@@ -1183,6 +1202,7 @@ function renderOptions() {
   $("#optBase").title = optState.downloadDir || "";
   if (optState.maxConcurrent) $("#optConc").value = optState.maxConcurrent;
   $("#optShutdown").checked = !!optState.shutdownWhenDone;
+  $("#optDonePopup").checked = optState.showDonePopup !== false;
   $("#optStartupWrap").hidden = !optState.startWithWindowsSupported;
   $("#optStartup").checked = !!optState.startWithWindows;
   $("#optDev").checked = devMode();
@@ -1236,6 +1256,14 @@ $("#optStartup").addEventListener("change", async () => {
     renderOptions(); // shows what Windows will really do
     toast(on ? "D BOX will start when Windows starts" : "D BOX won't start with Windows");
   } catch (e) { toast(e.message); $("#optStartup").checked = !on; }
+});
+$("#optDonePopup").addEventListener("change", async () => {
+  const on = $("#optDonePopup").checked;
+  try {
+    optState = await api("POST", "/api/settings/done-popup", { on });
+    if (on) lsSet(SUPPRESS_KEY, "0"); // also ends a "don't show for 2 hours" here
+    toast(on ? "The “Download complete” window is back" : "No “Download complete” window after downloads");
+  } catch (e) { toast(e.message); $("#optDonePopup").checked = !on; }
 });
 $("#optShutdown").addEventListener("change", async () => {
   const on = $("#optShutdown").checked;
@@ -1665,12 +1693,17 @@ function clearUrlIf(u) { const inp = $("#urlInput"); if (inp.value.trim() === u)
 // The IDM-style "New Download" dialog (save location by file type, Browse,
 // Start / Cancel). With native windows (serverGUI) the server pops one;
 // otherwise (Wails single-window / browser) it's an in-page iframe modal.
-async function openClassicDialog(u) {
+// openClassicDialog hands a link to D BOX: while auto download is on it just
+// starts; otherwise the New Download window opens (the native one in the app,
+// else in-page). ask (Save As…) always shows the window.
+async function openClassicDialog(u, ask) {
   u = String(u || "").trim();
   if (!u) { toast("Paste a URL first"); return; }
-  if (serverGUI) {
-    try { const r = await api("POST", "/api/prompt", { url: u }); if (r && r.native) { clearUrlIf(u); return; } } catch {}
-  }
+  try {
+    const r = await api("POST", "/api/prompt", { url: u, ask: !!ask });
+    if (r && r.auto) { toast("Auto download — started"); clearUrlIf(u); return; }
+    if (r && r.native) { clearUrlIf(u); return; }
+  } catch {}
   openDialog("/add?url=" + encodeURIComponent(u) + "&dialog=1");
   clearUrlIf(u);
 }
@@ -1699,7 +1732,7 @@ async function addUrlFlow(u, skipPlaylist) {
   catch (_) { setAddBusy(false); openClassicDialog(u); return; }
   clearUrlIf(u);
 }
-$("#saveAsBtn").addEventListener("click", () => openClassicDialog($("#urlInput").value));
+$("#saveAsBtn").addEventListener("click", () => openClassicDialog($("#urlInput").value, true));
 $("#addForm").addEventListener("submit", (ev) => { ev.preventDefault(); addUrlFlow($("#urlInput").value); });
 // Pasting several links at once into the URL bar opens the Link Grabber with
 // them instead of jamming them into one field. Copied links often carry only
@@ -1794,7 +1827,7 @@ async function previewWindows() {
   const sampleURL = $("#urlInput").value.trim() || "https://example.com/dbox-sample-video.mp4";
   const t = tasks.find(x => x.status === "completed") || tasks[0];
   if (serverGUI) { // native app: each is a real floating window
-    try { await api("POST", "/api/prompt", { url: sampleURL }); } catch {}
+    try { await api("POST", "/api/prompt", { url: sampleURL, ask: true }); } catch {}
     if (t) {
       try { await api("POST", "/api/detail", { id: t.id }); } catch {}
       try { await api("POST", "/api/done",   { id: t.id }); } catch {}
@@ -1811,11 +1844,12 @@ async function previewWindows() {
 const SUPPRESS_KEY = "myidm.donePopupSuppressUntil";
 let seenStatus = null, doneQueue = [], doneCurrent = null;
 const popupSuppressed = () => Date.now() < (+lsGet(SUPPRESS_KEY, "0") || 0);
+const donePopupOff = () => !!optState && optState.showDonePopup === false; // "Don't show again" / Options
 function detectCompletions(list) {
   if (seenStatus === null) { seenStatus = {}; for (const t of list) seenStatus[t.id] = t.status; return; }
   // In the native app, the engine pops a separate top-level "done" window, so
   // the in-app modal stays off to avoid a double popup.
-  const suppressed = popupSuppressed() || serverGUI;
+  const suppressed = popupSuppressed() || serverGUI || donePopupOff();
   for (const t of list) {
     const prev = seenStatus[t.id];
     if (!suppressed && t.status === "completed" && prev !== "completed"
@@ -1823,16 +1857,21 @@ function detectCompletions(list) {
   }
   const next = {}; for (const t of list) next[t.id] = t.status; seenStatus = next;
   showNextDone();
+  renderDoneMore(); // one finishing while another shows: "+1 more" and Close all
+}
+function renderDoneMore() {
+  $("#dmMore").textContent = doneQueue.length ? `+${doneQueue.length} more` : "";
+  $("#dmCloseAll").hidden = !doneQueue.length;
 }
 function showNextDone() {
   if (doneCurrent || !doneQueue.length) return;
-  if (popupSuppressed()) { doneQueue = []; return; }
+  if (popupSuppressed() || donePopupOff()) { doneQueue = []; return; }
   doneCurrent = doneQueue.shift(); const t = doneCurrent;
   $("#dmIcon").innerHTML = fileIcon(t.fileName || "", 32);
   $("#dmName").textContent = t.fileName || "download";
   $("#dmName").title = t.fileName || "";
   $("#dmMeta").textContent = [t.size > 0 ? humanBytes(t.size) : "", t.filePath || ""].filter(Boolean).join("  ·  ");
-  $("#dmMore").textContent = doneQueue.length ? `+${doneQueue.length} more` : "";
+  renderDoneMore();
   $("#dmSuppress").checked = false;
   const canOpen = t.fileExists !== false; $("#dmOpen").disabled = !canOpen; $("#dmFolder").disabled = !canOpen;
   $("#doneModal").classList.add("show");
@@ -1842,6 +1881,12 @@ function closeDone() {
   $("#doneModal").classList.remove("show"); doneCurrent = null; setTimeout(showNextDone, 180);
 }
 $("#dmClose").addEventListener("click", closeDone);
+$("#dmCloseAll").addEventListener("click", () => { doneQueue = []; closeDone(); });
+$("#dmNever").addEventListener("click", async () => {
+  try { optState = await api("POST", "/api/settings/done-popup", { on: false }); renderOptions(); } catch (e) { toast(e.message); }
+  doneQueue = []; closeDone();
+  toast("Turned off — Options brings the “Download complete” window back");
+});
 $("#dmOpen").addEventListener("click", () => { if (doneCurrent) doOpen(doneCurrent.id); closeDone(); });
 $("#dmFolder").addEventListener("click", () => { if (doneCurrent) doReveal(doneCurrent.id); closeDone(); });
 $("#doneModal").addEventListener("click", (e) => { if (e.target === $("#doneModal")) closeDone(); });
@@ -1906,11 +1951,30 @@ function handlePrompt(qs) {
   }
   openDialog("/add?" + qs);
 }
+// The status bar's auto download chip: what's left of it, and a stop button.
+function fmtLeft(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, ss = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+}
+function renderAuto(a) {
+  const on = !!(a && a.active);
+  $("#sbAuto").hidden = !on;
+  if (!on) return;
+  const t = a.mode === "files" ? `${a.left} file${a.left === 1 ? "" : "s"} left`
+          : a.mode === "minutes" ? `${fmtLeft(a.until - Date.now())} left` : "on";
+  const txt = `Auto download · ${t}`;
+  if ($("#sbAutoT").textContent !== txt) $("#sbAutoT").textContent = txt;
+}
+$("#sbAutoX").addEventListener("click", async () => {
+  try { renderAuto(await api("POST", "/api/autodownload", { mode: "off" })); toast("Auto download off — new downloads ask first again"); }
+  catch (e) { toast(e.message); }
+});
 async function poll() {
   try {
     const d = await api("GET", "/api/tasks");
     const list = d.tasks || [];
     tasks = list;
+    renderAuto(d.auto);
     detectCompletions(list);
     // The change-signature must cover every field a row RENDERS, or edits that
     // only touch that field (rename, re-schedule, move, external file delete)

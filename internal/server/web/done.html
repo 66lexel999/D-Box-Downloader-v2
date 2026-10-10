@@ -26,10 +26,13 @@
   body { background: var(--bg); color: var(--text); font: 12px/1.4 "Segoe UI", Tahoma, sans-serif;
     display: flex; flex-direction: column; padding: 11px 12px 10px; -webkit-user-select: none; user-select: none;
     overflow: hidden; }
-  .head { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; }
+  .head { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; min-width: 0; }
   .head .dbi { animation: pop .35s cubic-bezier(.2,1.4,.5,1) both; }
   @keyframes pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-  .ttl { font-size: 13.5px; font-weight: 650; color: var(--text-strong); }
+  .ttl { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 650; color: var(--text-strong);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .btn.sm { flex: none; padding: 3px 9px; font-size: 11px; gap: 5px; }
+  .btn[hidden] { display: none; }
   .file { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 9px; background: var(--bg2);
     border: 1px solid var(--border-soft); border-radius: var(--radius-lg); }
   .file .who { min-width: 0; flex: 1; }
@@ -38,11 +41,16 @@
     font-variant-numeric: tabular-nums; }
   .actions { display: flex; gap: 6px; margin-top: auto; padding-top: 9px; }
   .actions .btn { flex: 1; min-width: 0; padding: 6px 8px; gap: 5px; }
-  .foot { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; margin-top: 7px; cursor: pointer; }
+  .foot { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; margin-top: 7px; }
+  .foot label { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; cursor: pointer;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .foot .btn { height: 15px; padding: 0 6px; color: var(--muted); margin-right: -6px; } /* no taller than the checkbox line */
+  .foot .btn:hover { color: var(--text); }
 </style>
 </head>
 <body>
-  <div class="head"><span id="okIc"></span><div class="ttl">Download complete</div></div>
+  <div class="head"><span id="okIc"></span><div class="ttl">Download complete</div>
+    <button class="btn sm" id="closeAll" hidden title="Close every “Download complete” window">Close all</button></div>
   <div class="file">
     <span id="ficon"></span>
     <div class="who">
@@ -55,7 +63,10 @@
     <button class="btn" id="folder">Open folder</button>
     <button class="btn" id="close">Close</button>
   </div>
-  <label class="foot"><input type="checkbox" id="suppress"> Don't show this window for 2 hours</label>
+  <div class="foot">
+    <label title="Don't show this window for 2 hours"><input type="checkbox" id="suppress"> Hide for 2 hours</label>
+    <button class="btn ghost sm" id="never" title="Stop showing this window when a download finishes — turn it back on in Options">Don't show again</button>
+  </div>
 
 <script>
 const id = new URLSearchParams(location.search).get("id") || "";
@@ -66,16 +77,25 @@ $("okIc").innerHTML = DBI.icon("md-done", 26);
 $("ficon").innerHTML = DBI.icon("ft-file", 32);
 $("open").insertAdjacentHTML("afterbegin", DBI.icon("ui-open", 14));
 $("folder").insertAdjacentHTML("afterbegin", DBI.icon("ui-folder", 14));
+$("never").insertAdjacentHTML("afterbegin", DBI.icon("ui-eye-off", 12));
 function humanBytes(n){ if(n==null||n<0)return ""; const u=["B","KB","MB","GB","TB"];let i=0;
   while(n>=1024&&i<u.length-1){n/=1024;i++;} return n.toFixed(i?1:0)+" "+u[i]; }
 function api(method, path, body){ return fetch(path, { method,
   headers: body?{"Content-Type":"application/json"}:undefined, body: body?JSON.stringify(body):undefined }); }
+let closing = false;
 function closeSelf(){
+  if (closing) return;
+  closing = true;
   if(closeTimer){ clearInterval(closeTimer); closeTimer=null; }
-  // myidmCloseDownload also closes the status window when popups run in-process.
-  if (typeof window.myidmCloseDownload === "function") window.myidmCloseDownload();
-  else if (typeof window.myidmCloseDialog === "function") window.myidmCloseDialog();
-  else window.close();
+  // Leave the open-windows count right away (it would lapse on its own in a
+  // few seconds), then close — a local request, so this is instant.
+  const left = fetch("/api/done-windows/"+winKey, { method:"DELETE", keepalive:true }).catch(() => {});
+  Promise.race([left, new Promise((r) => setTimeout(r, 150))]).then(() => {
+    // myidmCloseDownload also closes the status window when popups run in-process.
+    if (typeof window.myidmCloseDownload === "function") window.myidmCloseDownload();
+    else if (typeof window.myidmCloseDialog === "function") window.myidmCloseDialog();
+    else window.close();
+  });
 }
 function done(){
   if ($("suppress").checked) api("POST","/api/done-suppress",{seconds:7200});
@@ -84,6 +104,28 @@ function done(){
   // popups — the status window polls this stamp and self-closes.
   try { api("POST","/api/popups/"+id+"/close",{at:Date.now()}); } catch(_) {}
   closeSelf();
+}
+// Several completion windows: each one checks in with D BOX (with whether
+// it's the window in front) and learns how many are open and whether it is
+// the active one — the one focused last, else the newest. Only that one
+// offers "Close all"; Close all / Don't show again close the rest from there.
+const winKey = ((window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+  : Date.now().toString(36) + Math.random().toString(36).slice(2)).replace(/[^A-Za-z0-9_-]/g, "");
+async function inFront(){
+  if (typeof window.myidmIsActive === "function") { try { return !!(await window.myidmIsActive()); } catch(_) {} }
+  return document.hasFocus();
+}
+async function checkIn(){
+  if (closing) return;
+  try {
+    const r = await fetch("/api/done-windows/"+winKey, { method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ focused: await inFront() }) });
+    const d = await r.json();
+    if (d.close) { done(); return; }
+    const many = !!d.active && d.count > 1;
+    $("closeAll").hidden = !many;
+    if (many) $("closeAll").textContent = "Close all (" + d.count + ")";
+  } catch(_) {}
 }
 // Self-close if the status window (our sibling) was closed after we opened.
 async function pollClose(){ try { const r = await fetch("/api/popups/"+id+"/close");
@@ -110,9 +152,21 @@ $("folder").addEventListener("click", () => {
   done();
 });
 $("close").addEventListener("click", done);
+$("closeAll").addEventListener("click", async () => {
+  try { await api("POST","/api/done-windows/close-all"); } catch(_) {}
+  done();
+});
+$("never").addEventListener("click", async () => {
+  // Off for good (Options turns it back on); D BOX closes the other open ones too.
+  try { await api("POST","/api/settings/done-popup",{on:false}); } catch(_) {}
+  done();
+});
+window.addEventListener("focus", checkIn); // move "Close all" to this window at once
+window.addEventListener("blur", checkIn);
 document.addEventListener("keydown", (e)=>{ if(e.key==="Escape") done(); else if(e.key==="Enter") $("open").click(); });
 load();
-closeTimer = setInterval(pollClose, 300);
+checkIn();
+closeTimer = setInterval(() => { pollClose(); checkIn(); }, 300);
 </script>
 <script>
 /* Reveal the native window only after first paint (parked off-screen until then
