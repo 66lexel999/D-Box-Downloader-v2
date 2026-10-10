@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script>
+/* Theme, applied pre-paint. The server stamps <html data-theme="…"> with the
+   saved theme (the popups run in their own WebView2 profile, so localStorage
+   from the main window never reaches them); only without that attribute fall
+   back to the local cache. "graphite"/"slate" are the default: no attribute. */
+(function () {
+  try {
+    var h = document.documentElement;
+    if (h.hasAttribute("data-theme")) return;
+    var t = localStorage.getItem("dbox.ui.theme");
+    if (t && t !== "graphite" && t !== "slate") h.setAttribute("data-theme", t);
+  } catch (e) {}
+})();
+</script>
+<link rel="stylesheet" href="/ui/theme.css">
+<script src="/ui/icons.js"></script>
+<title>Download File Info — D BOX</title>
+<style>
+  :root { font-size: 13px; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body { background: var(--bg); color: var(--text); font: 12px/1.35 "Segoe UI", Tahoma, sans-serif;
+    padding: 9px 12px 8px; -webkit-user-select: none; user-select: none; display: flex; flex-direction: column;
+    overflow: auto; }
+
+  .top { display: flex; gap: 11px; align-items: flex-start; }
+  .form { flex: 1; min-width: 0; display: grid; grid-template-columns: 62px 1fr; gap: 5px 9px; align-items: center; }
+  .form > label { color: var(--muted); text-align: right; white-space: nowrap; }
+  .form .field { width: 100%; min-width: 0; padding: 3px 8px; height: 25px; }
+  select.field { padding: 2px 5px; cursor: pointer; }
+  input[type=datetime-local].field { padding: 2px 8px; }
+  .row { display: flex; gap: 6px; min-width: 0; }
+  .row > .field { flex: 1; }
+  .iconbtn { flex: none; width: 30px; height: 25px; padding: 0; }
+
+  /* file-type preview card (right column) */
+  .preview { width: 88px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 10px;
+    padding: 12px 4px 9px; background: var(--bg2); border: 1px solid var(--border-soft); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm); }
+  .preview .art { height: 52px; display: grid; place-items: center; }
+  .preview .size { font-size: 11px; font-weight: 600; color: var(--text); text-align: center; line-height: 1.25;
+    font-variant-numeric: tabular-nums; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preview .kind { font-size: 10px; color: var(--muted); text-align: center; margin-top: -8px; min-height: 13px;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preview .size .spinner { width: 10px; height: 10px; border-width: 1.5px; margin: -2px 4px 0 0; }
+
+  .remember { grid-column: 2; }
+  .remember label { display: inline-flex; align-items: center; gap: 6px; color: var(--text-dim); cursor: pointer; }
+
+  /* status line / notice under the form */
+  .msg { display: flex; align-items: center; gap: 7px; min-height: 18px; margin-top: 7px; color: var(--muted);
+    font-size: 11.5px; }
+  .msg.empty { display: none; }
+  .msg .ic { flex: none; display: grid; place-items: center; }
+  .msg .tx { flex: 1; min-width: 0; }
+  .msg .t1 { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .msg .t2 { font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .msg.err { color: var(--red); }
+  .msg.ok { color: var(--green); }
+  .msg.info { color: var(--text-dim); }
+  .msg.info .ic { color: var(--accent); }
+  /* a web page: the callout with "Show everything on this page…" */
+  .msg.callout { padding: 6px 6px 6px 9px; border-radius: var(--radius); border: 1px solid var(--border);
+    background: var(--bg2); }
+  .msg.callout.err { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+  #grabBtn { display: none; flex: none; padding: 4px 10px; }
+  .msg.callout #grabBtn { display: inline-flex; }
+
+  .buttons { display: flex; gap: 7px; justify-content: flex-end; padding-top: 8px; }
+  .buttons .btn { padding: 5px 12px; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="form">
+      <label for="url">Address</label>
+      <input type="text" class="field" id="url" spellcheck="false" autocomplete="off">
+
+      <label for="category">Category</label>
+      <select id="category" class="field"></select>
+
+      <label for="folder">Save As</label>
+      <div class="row">
+        <input type="text" class="field" id="folder" spellcheck="false" autocomplete="off" placeholder="folder">
+        <button type="button" class="btn iconbtn" id="browse" title="Browse for a folder"></button>
+      </div>
+
+      <label for="name">File name</label>
+      <div class="row">
+        <input type="text" class="field" id="name" spellcheck="false" autocomplete="off">
+        <select id="quality" class="field" title="Video quality" style="display:none; flex:0 0 48%;"></select>
+      </div>
+
+      <div class="remember">
+        <label><input type="checkbox" id="remember"> Remember this path for the category</label>
+      </div>
+
+      <label for="desc">Description</label>
+      <input type="text" class="field" id="desc" spellcheck="false" autocomplete="off" placeholder="optional note">
+
+      <label for="schedule">Schedule</label>
+      <input type="datetime-local" class="field" id="schedule" title="Optional: start this download at a set time (use Download Later / Schedule)">
+    </div>
+
+    <div class="preview" id="preview">
+      <div class="art" id="glyph"></div>
+      <div class="size" id="size">…</div>
+      <div class="kind" id="kind"></div>
+    </div>
+  </div>
+
+  <div class="msg empty" id="msg">
+    <span class="ic" id="msgIc"></span>
+    <div class="tx"><div class="t1" id="msgT"></div><div class="t2" id="msgS" hidden></div></div>
+    <button type="button" class="btn" id="grabBtn" title="Open the Link Grabber with every file, video and link found on this page">Show everything on this page…</button>
+  </div>
+  <div class="buttons">
+    <button class="btn" id="later">Download Later</button>
+    <button class="btn primary" id="start">Start Download</button>
+    <button class="btn" id="cancel">Cancel</button>
+  </div>
+
+<script>
+const qs = new URLSearchParams(location.search);
+const ext = qs.get("ext") || "";
+const url = qs.get("url") || "";
+const nativeDialog = qs.get("dialog") === "1" || typeof window.myidmCloseDialog === "function";
+const canBrowse = typeof window.myidmPickFolder === "function";
+// Page context from the browser extension: the page the link was found on and a
+// server-side token carrying its headers/cookies. Sent back on Start so the
+// download looks like the page's own request.
+const ctxTok = qs.get("ctx") || "";
+const referer = qs.get("referer") || "";
+const hintTitle = qs.get("title") || "";
+// Video mode: opened from the extension's "Download this video" picker, or
+// switched on when the address turns out to be a web page with a video on it.
+// Start then posts /api/video (yt-dlp) with the chosen format instead of /api/tasks.
+let isVideo = qs.get("video") === "1";
+const fromPicker = isVideo;
+let vSelector = qs.get("selector") || "";
+let vAudio = qs.get("audio") === "1";
+let vExt = (qs.get("vext") || (vAudio ? "mp3" : "mp4")).toLowerCase();
+const vTitle = hintTitle;
+let vSize = 0, vEst = false, vItem = 0, nameTouched = false;
+const $ = (id) => document.getElementById(id);
+let catDirs = {}, extMap = {}, folderTouched = false;
+
+// Fallback extension per category, for a name that has none yet ("download").
+const CAT_EXT = { Compressed:"zip", Documents:"pdf", Music:"mp3", Video:"mp4", Programs:"exe", Images:"png", General:"" };
+let pageKind = "";   // inspect's kind ("file" | "hls" | "dash" | "page" | "drm"), shown under the size
+function setGlyph(what){
+  const g = $("glyph");
+  if (!window.DBI) return;
+  if (g.dataset.k === what) return; // don't re-render (and flicker) the same icon on every keystroke
+  g.dataset.k = what;
+  g.innerHTML = what ? DBI.badge(what, 48) : DBI.icon("ft-file", 48);
+}
+const KIND_LABEL = { hls:"HLS stream", dash:"DASH stream", page:"", drm:"DRM" };
+function setKind(t){ $("kind").textContent = t || ""; $("kind").title = t || ""; }
+
+function extOf(name){ const m=/\.([A-Za-z0-9]+)$/.exec(name||""); return m?m[1].toLowerCase():""; }
+function humanSize(n){ if(!n||n<0)return "unknown"; const u=["B","KB","MB","GB","TB"];let i=0;
+  while(n>=1024&&i<u.length-1){n/=1024;i++;} return `${n.toFixed(i?2:0)} ${u[i]}`; }
+
+function closeDialog(){
+  // Hosted in the main window's iframe (Wails single-window): hand back to the
+  // parent, since window.close() can't close an iframe.
+  try { if (window.parent !== window && window.parent.myidmDialogClosed) { window.parent.myidmDialogClosed(); return; } } catch(_) {}
+  if (nativeDialog && typeof window.myidmCloseDialog === "function") { window.myidmCloseDialog(); return; }
+  try { if (ext && window.chrome && chrome.runtime && chrome.runtime.sendMessage)
+    chrome.runtime.sendMessage(ext, { type: "closeDialog" }, () => {}); } catch(_) {}
+  setTimeout(() => { try { window.close(); } catch(_) {} }, 150);
+}
+
+function updatePreview(){
+  const cat = $("category").value || "General";
+  if (isVideo) {
+    setGlyph(vExt || (vAudio ? "mp3" : "mp4"));
+    setKind(vAudio ? "audio" : "video");
+    return;
+  }
+  const e = extOf($("name").value);
+  if (pageKind === "page" && (!e || /^(html?|php|aspx?|jsp)$/.test(e))) { setGlyph("html"); setKind(""); return; }
+  setGlyph(e || CAT_EXT[cat] || "");
+  setKind(KIND_LABEL[pageKind] || "");
+}
+
+function setSize(t, busy){
+  $("size").innerHTML = busy ? '<span class="spinner"></span>' : "";
+  $("size").appendChild(document.createTextNode(t));
+  $("size").title = t;
+}
+
+async function init(){
+  $("url").value = url;
+  $("browse").innerHTML = DBI.icon("ui-folder", 15);
+  $("start").insertAdjacentHTML("afterbegin", DBI.icon("ui-download", 14));
+  $("later").insertAdjacentHTML("afterbegin", DBI.icon("ui-clock", 14));
+  $("grabBtn").insertAdjacentHTML("afterbegin", DBI.icon("ui-list", 14));
+  $("grabBtn").addEventListener("click", showEverything);
+  $("name").value = isVideo ? (vTitle || "video") : (qs.get("name") || (() => {
+    try { return decodeURIComponent(new URL(url).pathname.split("/").pop() || "") || "download"; } catch { return "download"; }
+  })());
+
+  try {
+    const data = await (await fetch("/api/categories")).json();
+    for (const c of data.categories) {
+      catDirs[c.name] = c.dir;
+      const o = document.createElement("option"); o.value = c.name; o.textContent = c.name; $("category").appendChild(o);
+    }
+    extMap = data.extMap || {};
+  } catch(_) {}
+
+  const setFolderFromCat = () => { const d = catDirs[$("category").value]; if (d !== undefined && !folderTouched) $("folder").value = d; };
+  const autoCat = () => { const cat = isVideo ? "Video" : (extMap[extOf($("name").value)] || "General");
+    if (catDirs[cat] !== undefined) { $("category").value = cat; setFolderFromCat(); } updatePreview(); };
+  autoCat(); setFolderFromCat();
+
+  $("name").addEventListener("input", autoCat);
+  $("category").addEventListener("change", () => { folderTouched = false; setFolderFromCat(); updatePreview(); });
+  $("folder").addEventListener("input", () => { folderTouched = true; });
+
+  if (canBrowse) {
+    $("browse").addEventListener("click", async () => {
+      try { const p = await window.myidmPickFolder($("folder").value || ""); if (p) { $("folder").value = p; folderTouched = true; } } catch(_) {}
+    });
+  } else { $("browse").style.display = "none"; }
+
+  $("name").addEventListener("input", () => { nameTouched = true; });
+  // A name the extension supplied with a real extension (a download="…" link)
+  // wins over the probe; a bare one ("videoplayback") gets replaced.
+  nameTouched = /\.[a-z0-9]{1,5}$/i.test(qs.get("name") || "") && !/\.(php|aspx?|jsp|cgi|m3u8|html?)$/i.test(qs.get("name"));
+  if (fromPicker) {
+    setSize(vAudio ? "audio" : "video");
+  } else if (url) {
+    inspect(autoCat); // real name / size / kind, checked by D BOX itself
+  }
+
+  $("start").addEventListener("click", () => submit(false));
+  $("later").addEventListener("click", () => submit(true));
+  // Picking a schedule time turns "Download Later" into "Schedule" so it's clear
+  // the deferred button will start the download at that time.
+  $("schedule").addEventListener("input", () => {
+    const b = $("later"), sched = !!$("schedule").value;
+    b.innerHTML = DBI.icon(sched ? "ui-calendar" : "ui-clock", 14);
+    b.appendChild(document.createTextNode(sched ? "Schedule" : "Download Later"));
+  });
+  $("cancel").addEventListener("click", closeDialog);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { closeDialog(); return; }
+    if (e.key !== "Enter") return;
+    // Enter on a button activates THAT button (don't also start the download —
+    // Enter on Cancel used to submit anyway); Enter in the Schedule field means
+    // "schedule it", not "start right now ignoring the time I just typed".
+    if (e.target.tagName === "BUTTON") return;
+    if (e.target.id === "schedule" && $("schedule").value) { submit(true); return; }
+    submit(false);
+  });
+  $("name").focus(); $("name").select();
+}
+
+// setMsg shows the status line under the form: cls "" (plain), "info", "err",
+// "ok" or "busy"; sub is an optional smaller second line (e.g. why the direct
+// check failed although yt-dlp found the video).
+const MSG_ICON = { info:"ui-info", err:"ui-warning", ok:"ui-check" };
+function setMsg(t, cls, sub){
+  const m = $("msg"), callout = m.classList.contains("callout");
+  m.className = "msg" + (cls && cls !== "busy" ? " " + cls : "") + (t || callout ? "" : " empty") + (callout ? " callout" : "");
+  $("msgIc").innerHTML = cls === "busy" ? '<span class="spinner"></span>' : (MSG_ICON[cls] ? DBI.icon(MSG_ICON[cls], 14) : "");
+  $("msgT").textContent = t || ""; $("msgT").title = t || "";
+  $("msgS").textContent = sub || ""; $("msgS").title = sub || ""; $("msgS").hidden = !sub;
+}
+// showGrab turns the status line into a callout with the "Show everything on
+// this page…" button (web pages / pages holding several videos). primary makes
+// it the dialog's main action (a page with nothing D BOX can download itself).
+function showGrab(primary){
+  $("msg").classList.add("callout"); $("msg").classList.remove("empty");
+  $("grabBtn").classList.toggle("primary", !!primary);
+  $("start").classList.toggle("primary", !primary);
+}
+// showEverything hands the page to the main window's Link Grabber and closes.
+async function showEverything(){
+  const b = $("grabBtn"); b.disabled = true;
+  try {
+    const body = { url: ($("url").value || url).trim() };
+    if (ctxTok) body.ctx = ctxTok;
+    if (referer) body.referer = referer;
+    const title = hintTitle || (isVideo ? $("name").value.trim() : "");
+    if (title) body.title = title;
+    const r = await fetch("/api/grab/show", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || ("HTTP " + r.status)); }
+    closeDialog();
+  } catch(e) {
+    b.disabled = false;
+    setMsg("Couldn't open the Link Grabber: " + (e.message || e), "err");
+  }
+}
+
+// inspect asks D BOX to probe the address (GET /api/inspect). The dialog used to
+// HEAD it straight from this page, which the browser's CORS rules block on
+// nearly every site — the reason sizes showed "unknown" and names came out as
+// raw URL fragments ("videoplayback", "index.m3u8").
+async function inspect(autoCat){
+  setSize("checking…", true);
+  const p = new URLSearchParams({ url });
+  if (ctxTok) p.set("ctx", ctxTok);
+  if (referer) p.set("referer", referer);
+  if (hintTitle) p.set("title", hintTitle);
+  let d;
+  try {
+    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 90000);
+    d = await (await fetch("/api/inspect?" + p.toString(), { signal: ctrl.signal })).json();
+    clearTimeout(t);
+  } catch(_) { setSize("unknown"); return; }
+  const setName = (n) => { if (n && !nameTouched) { $("name").value = n; autoCat(); } };
+  pageKind = d.kind || "";
+  // Several media items on the page: yt-dlp recommends the main one; its
+  // options are video.options (or that entry's own options).
+  const entries = d.entries || (d.video && d.video.entries) || [];
+  const recIdx = d.recommended || (d.video && d.video.recommended) || 0;
+  const rec = entries.find((en) => en.index === recIdx) || null;
+  const multi = entries.length > 1;
+  if (d.error) {
+    setSize("unknown");
+    setMsg(d.error, "err");
+    if (d.kind === "page" || multi || /web page/i.test(d.error)) showGrab(true);
+    updatePreview();
+    return;
+  }
+  let opts = d.video && d.video.options;
+  if ((!opts || !opts.length) && rec && rec.options && rec.options.length) opts = rec.options;
+  if (opts && opts.length) {
+    // A web page (or DASH stream) with a video on it: grab the video via yt-dlp.
+    isVideo = true;
+    setName((multi && rec && rec.title) || (d.video && d.video.title) || "");
+    vItem = multi ? recIdx : 0;
+    fillQuality(opts);
+    setMsg(multi ? (entries.length + " videos on this page — the main one is selected.")
+                 : (d.kind === "dash" ? "DASH video stream — downloaded with yt-dlp."
+                                      : "Video found on this web page."), "info",
+           d.probeError ? "Direct check: " + d.probeError : "");
+    if (d.kind === "page" || multi) showGrab(false);
+  } else if (d.kind === "page") {
+    setSize("web page");
+    setMsg(d.ytdlp ? "No downloadable video found on this page." : "This address is a web page, not a file. Grabbing videos from pages needs yt-dlp (Video download tools).",
+           "err", d.ytdlp && d.videoError ? d.videoError : "");
+    showGrab(true);
+  } else if (d.kind === "drm") {
+    setSize("protected");
+    setMsg("This stream is DRM-protected and can't be downloaded.", "err");
+  } else {
+    setName(d.fileName);
+    setSize(d.live ? "live" : (d.size > 0 ? (d.sizeEstimated ? "~" : "") + humanSize(d.size) : "unknown"));
+    if (d.kind === "hls") setMsg(d.live ? "Live stream — it records until you press Pause, then saves the recording."
+                                        : "Video stream (HLS) — saved as a single video file.", "info");
+    else if (d.kind === "dash") setMsg("DASH video stream — needs yt-dlp (Video download tools).", "err");
+    else if (d.size > 0 && !d.resumable) setMsg("This server doesn't support resuming — a paused download restarts.", "info");
+  }
+  updatePreview();
+}
+
+// fillQuality shows the quality picker for a video page and tracks the choice.
+// Labels come from yt-dlp ("Best quality – 1080p MP4 (~335 MB)", "Audio – MP3
+// 128k"); a size is an estimate only when the option says so.
+function fillQuality(opts){
+  const sel = $("quality"); sel.innerHTML = "";
+  opts.forEach((o, i) => { const op = document.createElement("option"); op.value = String(i); op.textContent = o.label; sel.appendChild(op); });
+  sel.style.display = "";
+  const apply = () => {
+    const o = opts[+sel.value] || opts[0];
+    vSelector = o.selector; vExt = (o.ext || "mp4").toLowerCase(); vAudio = !!o.audio; vSize = o.size || 0; vEst = !!o.estimated;
+    if (o.playlistItem > 0) vItem = o.playlistItem;
+    sel.title = o.label || "Video quality";
+    setSize(vSize > 0 ? (vEst ? "~" : "") + humanSize(vSize) : (vAudio ? "audio" : "video"));
+    updatePreview();
+  };
+  sel.onchange = apply; apply();
+}
+
+async function submit(later){
+  // "Download Later" with a Schedule time set => start at that time (epoch ms);
+  // 0 means start now (Start Download) or queue-paused (Download Later, no time).
+  const schedEl = $("schedule");
+  const at = (later && schedEl && schedEl.value) ? new Date(schedEl.value).getTime() : 0;
+  const scheduling = at > Date.now();
+  if (at > 0 && !scheduling) { // a past time would silently degrade to a plain held item
+    setMsg("That schedule time is in the past — pick a future time (or clear it).", "err");
+    schedEl.focus();
+    return;
+  }
+  $("start").disabled = $("later").disabled = true;
+  setMsg("Adding…", "busy");
+  try {
+    const dir = $("folder").value.trim();
+    let endpoint, body;
+    if (isVideo) {
+      endpoint = "/api/video";
+      body = { url: ($("url").value || url).trim(), title: $("name").value.trim() || vTitle || "",
+        selector: vSelector, ext: vExt, audio: vAudio };
+      if (vSize > 0) body.size = vSize;
+      if (vItem > 0) body.playlistItem = vItem;   // the chosen entry of a multi-video page
+    } else {
+      endpoint = "/api/tasks";
+      body = { url: ($("url").value || url).trim(), fileName: $("name").value };
+      if (hintTitle) body.title = hintTitle;
+    }
+    if (ctxTok) body.ctx = ctxTok;
+    if (referer) body.referer = referer;
+    if (dir) body.dir = dir; else body.category = $("category").value;
+    if (scheduling) body.scheduleAt = at;       // server creates it in "scheduled" state
+    else if (later) body.later = true;          // server creates it in the Download Later queue (held)
+    const desc = $("desc").value.trim();
+    if (desc) body.description = desc;          // shows in the main list's Description column
+    // "Remember this path for the category": pin this folder so future downloads
+    // of the category keep using it, even after the base folder changes.
+    if (dir && $("remember") && $("remember").checked) {
+      try { await fetch("/api/settings/category", { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ category: $("category").value, dir }) }); } catch(_) {}
+    }
+    const r = await fetch(endpoint, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
+    if (scheduling && data.id) {
+      // Created already in "scheduled" state — it starts on its own at the time.
+    } else if (later && data.id) {
+      // Created in the Download Later queue (held) — start it from there manually.
+    } else if (data.id) {
+      // Show the IDM-style progress view for the download we just started.
+      // In the single-window host, swap this dialog to the status view; otherwise
+      // (native windows) ask the server to pop the separate status window.
+      try { if (window.parent !== window && window.parent.myidmShowStatus) { window.parent.myidmShowStatus(data.id); return; } } catch(_) {}
+      await fetch("/api/detail", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ id: data.id }) }).catch(() => {});
+    }
+    setMsg(scheduling ? "Scheduled" : (later ? "Saved for later" : "Started"), "ok");
+    closeDialog();
+  } catch(e) {
+    $("start").disabled = $("later").disabled = false;
+    setMsg("Failed: " + (e.message || e), "err");
+  }
+}
+init();
+</script>
+<script>
+/* Reveal the native window only after first paint (parked off-screen until then
+   by the gui layer) so the dialog never flashes white/black on open. */
+(function () {
+  function ready() { try { window.myidmReady && window.myidmReady(); } catch (e) {} }
+  function arm() { requestAnimationFrame(function () { requestAnimationFrame(ready); }); }
+  if (document.readyState === 'loading') addEventListener('DOMContentLoaded', arm);
+  else arm();
+})();
+</script>
+<div id="wsz"><span id="wsz-t"></span><span id="wsz-x" title="Hide — Ctrl+Alt+W to toggle">&#10005;</span></div>
+<style>
+#wsz{position:fixed;right:7px;bottom:7px;z-index:2147483647;background:var(--bg2);color:var(--text);font:600 11px/1.25 "Segoe UI",Tahoma,sans-serif;padding:3px 8px;border:1px solid var(--accent);border-radius:5px;pointer-events:none;white-space:nowrap;letter-spacing:.2px;}
+#wsz-x{pointer-events:auto;cursor:pointer;margin-left:9px;opacity:.6;}
+#wsz-x:hover{opacity:1;}
+</style>
+<script>
+(function(){var N=2,K="dbox.wsz.show";
+var b=document.getElementById("wsz"),t=document.getElementById("wsz-t"),x=document.getElementById("wsz-x");
+function shown(){try{return localStorage.getItem(K)==="1";}catch(e){return false;}}
+function apply(){b.style.display=shown()?"":"none";}
+function dpr(){return Math.round((window.devicePixelRatio||1)*100)/100;}
+function upd(){t.textContent="#"+N+"  "+window.innerWidth+" × "+window.innerHeight+"  · ×"+dpr();}
+function toggle(){try{localStorage.setItem(K,shown()?"0":"1");}catch(e){}apply();}
+x.addEventListener("click",toggle);
+window.addEventListener("resize",upd);
+window.addEventListener("keydown",function(e){if(e.ctrlKey&&e.altKey&&(e.key==="w"||e.key==="W")){e.preventDefault();toggle();}});
+upd();apply();window.__wszToggle=toggle;
+})();
+</script>
+</body>
+</html>

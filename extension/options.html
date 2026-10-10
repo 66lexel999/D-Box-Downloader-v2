@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>D BOX Integration — Settings</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 "Segoe UI", system-ui, sans-serif; max-width: 560px; margin: 24px auto;
+         padding: 0 16px; background: Canvas; color: CanvasText; }
+  h1 { font-size: 19px; }
+  label.row { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
+  label.col { display: block; margin: 14px 0; }
+  label.col > span { display: block; font-weight: 600; margin-bottom: 4px; }
+  input[type=text] { width: 100%; padding: 8px 10px; font: inherit; border: 1px solid GrayText;
+         border-radius: 6px; background: Field; color: FieldText; }
+  .hint { font-size: 12px; opacity: .75; margin-top: 4px; }
+  .bar { display: flex; gap: 10px; align-items: center; margin-top: 18px; }
+  button { font: inherit; padding: 8px 18px; border-radius: 6px; cursor: pointer;
+           border: 1px solid GrayText; background: ButtonFace; color: ButtonText; }
+  button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+  #status { font-size: 13px; opacity: .9; }
+</style>
+</head>
+<body>
+  <h1>D BOX Integration</h1>
+  <p class="hint">Categories, save folders and the download engine all live in
+    <b>D BOX</b>. This extension captures downloads and the videos pages play,
+    and hands them to D BOX. Click its toolbar icon to bring up D BOX;
+    right-click the icon for Capture on/off, the media on this page and the
+    Link Grabber.</p>
+
+  <label class="row"><input type="checkbox" id="enabled"> Capture downloads</label>
+
+  <label class="col"><span>D BOX address</span>
+    <input type="text" id="myidmBase" placeholder="http://127.0.0.1:8081"></label>
+  <div class="hint">Must match D BOX's <code>-listen</code> address (default
+    <code>127.0.0.1:8081</code>).</div>
+
+  <div class="bar">
+    <button class="primary" id="save">Save</button>
+    <button id="test">Test connection</button>
+    <span id="status"></span>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

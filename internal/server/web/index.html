@@ -1,0 +1,1982 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="/icons/appicon.png">
+<title>D BOX — Download Manager</title>
+<script>
+/* Appearance BEFORE first paint, so the window never flashes the wrong look.
+   The server stamps the saved theme into <html data-theme="…"> (GET/POST
+   /api/settings/ui — shared with the New Download / status / complete windows);
+   localStorage is only a cache / fallback when that attribute is missing.
+   "graphite" is the legacy id of the old default and now means "slate". */
+(function () {
+  var de = document.documentElement;
+  function get(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
+  if (!de.hasAttribute("data-theme")) {
+    var t = get("dbox.ui.theme", "");
+    if (t && t !== "graphite" && t !== "slate") de.setAttribute("data-theme", t);
+  }
+  var z = +get("dbox.ui.zoom", "100") || 100;
+  if (z !== 100) de.style.zoom = z / 100;
+  // Text size = ONE multiplier (--fs). The page's font sizes are rem-based off
+  // html{font-size:calc(13px * var(--fs))}; row heights use calc(… * var(--fs)).
+  window.__applyTextSize = function (pct) {
+    var m = (+pct || 100) / 100;
+    if (m === 1) de.style.removeProperty("--fs"); else de.style.setProperty("--fs", m.toFixed(3));
+  };
+  window.__applyTextSize(get("dbox.ui.text", "100"));
+})();
+</script>
+<link rel="stylesheet" href="/ui/theme.css">
+<link rel="stylesheet" href="/ui/grabber.css">
+<script src="/ui/icons.js"></script>
+<script src="/ui/grabber.js"></script>
+<style>
+  /* Colours come from /ui/theme.css tokens only — no hex values in this sheet. */
+  :root { --fs: 1; --row-h: calc(22px * var(--fs)); --side-w: 178px; }
+  * { box-sizing: border-box; margin: 0; }
+  html { font-size: calc(13px * var(--fs)); }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", Tahoma, system-ui, sans-serif; font-size: 1rem;
+    display: flex; flex-direction: column; overflow: hidden;
+    -webkit-user-select: none; user-select: none;
+  }
+  input, textarea { -webkit-user-select: text; user-select: text; }
+  button { font: inherit; color: inherit; }
+  [hidden] { display: none !important; }
+  .hint { color: var(--muted); font-size: .8rem; line-height: 1.45; }
+  .hint.mt { margin-top: 10px; }
+
+  /* ---- menu bar ---- */
+  .menubar { display: flex; align-items: center; gap: 1px; padding: 1px 4px 1px 0; background: var(--bg);
+    border-bottom: 1px solid var(--border-soft); font-size: .923rem; flex: none; overflow: hidden; }
+  .applogo { width: 16px; height: 16px; margin: 0 5px 0 8px; flex: none; }
+  .menubar .m { padding: 3px 9px; border: 0; border-radius: 5px; background: none; cursor: default;
+    white-space: nowrap; color: var(--text); transition: background-color .1s; }
+  .menubar .m u { text-decoration: underline; text-underline-offset: 2px; }
+  .menubar .m:hover, .menubar .m.open { background: var(--hover); color: var(--text-strong); }
+  .menubar .m.open { background: var(--accent-soft); }
+
+  /* ---- toolbar: big-icon tiles on a soft gradient bar ---- */
+  .toolbar { display: flex; align-items: stretch; gap: 2px; padding: 3px 6px;
+    background: linear-gradient(var(--grad-a), var(--grad-b)); border-bottom: 1px solid var(--border);
+    box-shadow: var(--shadow-sm); position: relative; z-index: 3;
+    flex: none; overflow-x: auto; scrollbar-width: none; }
+  .toolbar::-webkit-scrollbar { display: none; }
+  .tb { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; flex: none;
+    min-width: 52px; padding: 3px 7px 2px; border: 1px solid transparent; border-radius: 7px;
+    background: transparent; cursor: default; color: var(--text);
+    transition: background-color .12s, border-color .12s, box-shadow .12s, transform .06s; }
+  .tb .dbi { transition: transform .15s ease; }
+  .tb .tl { font-size: .77rem; line-height: 1.2; white-space: nowrap; color: var(--text-dim); }
+  .tb:hover { background: var(--hover); border-color: var(--border); box-shadow: var(--shadow-sm); }
+  .tb:hover .dbi { transform: translateY(-1px) scale(1.06); }
+  .tb:hover .tl { color: var(--text); }
+  .tb:active { background: var(--press); transform: translateY(1px); box-shadow: none; }
+  .tb:active .dbi { transform: none; }
+  .tb.active { background: var(--accent-soft); border-color: var(--accent); }
+  .tb.active .tl { color: var(--text-strong); }
+  .tbsep { flex: none; width: 1px; background: var(--border); margin: 7px 4px; }
+
+  /* ---- add bar ---- */
+  .addbar { display: flex; align-items: center; gap: 6px; padding: 5px 7px; background: var(--bg);
+    border-bottom: 1px solid var(--border-soft); flex: none; font-size: .923rem; }
+  .addbar .urlbox { position: relative; flex: 1; min-width: 90px; display: flex; }
+  .addbar .urlbox .ulic { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); line-height: 0;
+    color: var(--muted); pointer-events: none; transition: color .12s; }
+  .addbar .urlbox:focus-within .ulic { color: var(--accent); }
+  .addbar #urlInput { flex: 1; min-width: 0; height: 28px; padding: 0 9px 0 29px; }
+  .addbar select.field { height: 28px; padding: 0 4px; max-width: 120px; }
+  .addbar .btn { height: 28px; padding: 0 12px; flex: none; }
+  .addbar #addBtn { min-width: 66px; }
+  .addbar #addBtn .spinner { width: 12px; height: 12px; border-color: currentColor; border-top-color: transparent; opacity: .9; }
+
+  /* ---- main split ---- */
+  .layout { flex: 1; min-height: 0; display: flex; background: var(--bg); padding: 5px; gap: 5px; }
+  .sidebar { width: var(--side-w); flex: none; background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .rail { display: none; flex: none; width: 22px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); align-items: flex-start; justify-content: center; padding-top: 4px; }
+  body.cats-collapsed .sidebar { display: none; }
+  body.cats-collapsed .rail { display: flex; }
+  .iconbtn { display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0;
+    border-radius: 5px; background: none; color: var(--muted); cursor: default; }
+  .iconbtn:hover { background: var(--hover); color: var(--text); }
+  .flip { transform: scaleX(-1); }
+  .cattitle { display: flex; align-items: center; gap: 6px; padding: 4px 4px 4px 9px; font-size: .846rem; font-weight: 600;
+    letter-spacing: .02em; color: var(--text-dim); background: linear-gradient(var(--bg2), var(--panel));
+    border-bottom: 1px solid var(--border-soft); flex: none; }
+  .cattitle .iconbtn { margin-left: auto; }
+  .tree { flex: 1; overflow-y: auto; padding: 4px 4px; font-size: .923rem; }
+
+  .trow { display: flex; align-items: center; gap: 6px; height: calc(24px * var(--fs)); padding: 0 6px 0 2px;
+    margin: 1px 0; border-radius: 6px; cursor: default; white-space: nowrap; outline-offset: -2px;
+    transition: background-color .1s; }
+  .trow:hover { background: var(--hover); }
+  .trow.active { background: var(--sel); box-shadow: inset 2px 0 0 var(--accent); color: var(--text-strong); }
+  .trow .tw { width: 14px; flex: none; display: grid; place-items: center; color: var(--muted); }
+  .trow .tw:hover { color: var(--text); }
+  .trow .tico { width: 16px; flex: none; line-height: 0; }
+  .trow .tlbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .trow .tcnt { flex: none; min-width: 20px; height: 16px; padding: 0 6px; border-radius: 8px; text-align: center;
+    background: var(--panel-2); color: var(--muted); font-size: .75rem; line-height: 16px; font-weight: 600;
+    font-variant-numeric: tabular-nums; }
+  .trow .tcnt.z { opacity: .55; }
+  .trow.active .tcnt { background: var(--accent-soft); color: var(--text); opacity: 1; }
+  .trow.child { padding-left: 18px; }
+  .tnode.collapsed .tchildren { display: none; }
+  .tsep { height: 1px; background: var(--border-soft); margin: 4px 6px; }
+
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; container-type: inline-size;
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+
+  /* ---- downloads list ---- */
+  .tablewrap { flex: 1; overflow: auto; }
+  .dtable { width: 100%; min-width: 300px; border-collapse: separate; border-spacing: 0; table-layout: fixed;
+    font-size: .885rem; }
+  .dtable thead th {
+    position: sticky; top: 0; z-index: 2; height: calc(24px * var(--fs));
+    background: linear-gradient(var(--bg2), var(--grad-b)); color: var(--text-dim);
+    text-align: center; font-weight: 600; font-size: .846rem;
+    padding: 0 7px; border-right: 1px solid var(--border-soft); border-bottom: 1px solid var(--border);
+    cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    transition: background-color .1s, color .1s; }
+  .dtable thead th:last-child { border-right: 0; }
+  .dtable thead th:hover { background: var(--hover); color: var(--text); }
+  .dtable thead th.sorted { color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
+  .dtable thead th .arr { display: inline-block; margin-left: 3px; vertical-align: -1px; line-height: 0; }
+  .dtable thead th .arr.up { transform: rotate(180deg); }
+  .dtable thead th.c-name, .dtable td.c-name { text-align: left; }
+  .dtable td {
+    padding: 0 7px; height: var(--row-h); border-right: 1px solid var(--grid); border-bottom: 1px solid var(--grid);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); text-align: center;
+    font-variant-numeric: tabular-nums; }
+  .dtable td:last-child { border-right: 0; }
+  .dtable tr.row:hover td { background-color: var(--hover); }
+  .dtable tr.row.selected td { background-color: var(--sel); color: var(--text-strong); }
+  .dtable tr.row.selected td.c-name { box-shadow: inset 2px 0 0 var(--accent); }
+  .c-q { width: 28px; color: var(--muted); }
+  .c-size { width: 70px; }
+  .c-status { width: 100px; }
+  .c-eta { width: 62px; color: var(--muted); }
+  .c-date { width: 104px; }
+  .c-desc { width: 118px; }
+  .dtable td.c-eta, .dtable td.c-date, .dtable td.c-desc { color: var(--muted); }
+  .dtable tr.row.selected td.c-eta, .dtable tr.row.selected td.c-date, .dtable tr.row.selected td.c-desc { color: var(--text-dim); }
+  .c-name .ic { display: inline-block; width: 16px; height: 16px; margin-right: 7px; vertical-align: middle; line-height: 0; margin-top: -2px; }
+  .c-name .icimg { object-fit: contain; }
+  /* Narrow list: drop Description, then Last Try Date, then Q — never a forced sideways scroll. */
+  @container (max-width: 720px) { .dtable .c-desc { display: none; } }
+  @container (max-width: 560px) { .dtable .c-date { display: none; } }
+  @container (max-width: 400px) { .dtable .c-q { display: none; } }
+
+  /* status cell: icon + text, or a progress pill */
+  .st { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; vertical-align: middle; }
+  .st > span { overflow: hidden; text-overflow: ellipsis; }
+  .st.completed { color: var(--green); }
+  .st.failed { color: var(--red); font-weight: 600; }
+  .st.scheduled { color: var(--yellow); font-weight: 600; }
+  .st.queued, .st.paused { color: var(--text-dim); }
+  .st.later { color: var(--blue); }
+  .st.skipped { color: var(--muted); }
+  .st.live { color: var(--red); font-weight: 600; }
+  .st.live .dbi { animation: livepulse 1.3s ease-in-out infinite; }
+  .st.missing { color: var(--muted); }
+  @keyframes livepulse { 50% { opacity: .35; transform: scale(.85); } }
+  .dtable td.c-status { padding: 0 5px; }
+  .dtable .pill { margin: 0 1px; }
+  .pill > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; padding: 0 5px; }
+  :root[data-theme=light] .pill > span { color: var(--text); text-shadow: none; }
+  .pill.indet::before { content: ""; position: absolute; inset: 0; border-radius: 8px;
+    background: repeating-linear-gradient(-45deg, transparent 0 5px, var(--accent-soft) 5px 10px);
+    background-size: 14px 14px; animation: stripes .9s linear infinite; }
+  .pill.indet > span { color: var(--text-dim); text-shadow: none; }
+  @keyframes stripes { to { background-position: 14px 0; } }
+
+  /* A skipped Download-Later row: a skip tag on the file + one continuous line
+     through the middle of every cell (drawn over the selection colour too). */
+  tr.row.skip td { color: var(--muted);
+    background-image: linear-gradient(to bottom, transparent calc(50% - 1px), var(--strike) calc(50% - 1px), var(--strike) calc(50% + 1px), transparent calc(50% + 1px)); }
+  tr.row.skip td.c-name { opacity: .75; }
+  tr.row.skip td.c-name .ic { opacity: .45; }
+  tr.row.skip .skipmark { display: inline-block; margin-right: 5px; vertical-align: -3px; line-height: 0; }
+
+  .emptyrow td { height: auto; border: 0; padding: 18px 12px; text-align: center; white-space: normal; }
+  .emptyrow:hover td { background: none; }
+  .empty { display: flex; flex-direction: column; align-items: center; gap: 4px; color: var(--muted); }
+  .empty .dbi { width: 120px; height: 100px; margin-bottom: 2px; }
+  .empty .e1 { font-size: 1.08rem; font-weight: 650; color: var(--text); }
+  .empty .e2 { font-size: .85rem; }
+
+  /* ---- status bar ---- */
+  .statusbar { display: flex; align-items: center; gap: 10px; padding: 0 10px; height: calc(22px * var(--fs));
+    font-size: .846rem; color: var(--muted); background: var(--bg); border-top: 1px solid var(--border-soft); flex: none;
+    white-space: nowrap; overflow: hidden; }
+  #sbLeft { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .sbchip { display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; height: 16px; border-radius: 8px;
+    background: var(--accent-soft); color: var(--text); font-size: .77rem; font-weight: 600; flex: none; }
+  .sbchip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--green);
+    animation: livepulse 1.4s ease-in-out infinite; }
+  .statusbar .spd { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; flex: none;
+    font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
+
+  /* ---- floating dropdowns (menus + row context menu) ---- */
+  .dropdown { position: fixed; display: none; z-index: 1600; min-width: 190px; padding: 4px;
+    background: var(--bg2); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: var(--shadow-md); font-size: .96rem; animation: menupop .12s ease-out; }
+  @keyframes menupop { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+  .dropdown .di { display: flex; gap: 9px; align-items: center; width: 100%; padding: 5px 12px 5px 9px;
+    border: 0; border-radius: 5px; background: none; text-align: left; cursor: default; white-space: nowrap;
+    transition: background-color .09s; outline-offset: -2px; }
+  .dropdown .di:hover, .dropdown .di:focus-visible { background: var(--accent-soft); color: var(--text-strong); }
+  .dropdown .di .k { width: 16px; flex: none; display: grid; place-items: center; color: var(--text-dim); line-height: 0; }
+  .dropdown .di:hover .k { color: var(--accent); }
+  .dropdown .di.danger, .dropdown .di.danger .k { color: var(--red); }
+  .dropdown .di.danger:hover { background: var(--accent-soft); background: color-mix(in srgb, var(--red) 16%, transparent); }
+  .dropdown .sep { height: 1px; background: var(--border); margin: 4px 6px; }
+
+  #toast {
+    position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(80px); opacity: 0;
+    background: var(--toast-bg); color: var(--toast-text); border-radius: 8px; box-shadow: var(--shadow-md);
+    padding: 8px 16px; font-size: .96rem; transition: transform .25s, opacity .25s; max-width: 80vw; z-index: 2000;
+    pointer-events: none; }
+  #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+
+  /* ---- modals ---- */
+  .modal-backdrop { position: fixed; inset: 0; background: var(--backdrop); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+    display: none; align-items: center; justify-content: center; z-index: 1800; padding: 12px; }
+  .modal-backdrop.show { display: flex; animation: bfade .15s ease-out; }
+  @keyframes bfade { from { opacity: 0; } to { opacity: 1; } }
+  .modal { width: 430px; max-width: 100%; max-height: calc(100vh - 24px); display: flex; flex-direction: column;
+    background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg); overflow: hidden; animation: pop .16s ease-out; }
+  .modal.w-sm { width: 360px; } .modal.w-md { width: 480px; } .modal.w-lg { width: 580px; } .modal.w-xl { width: 640px; }
+  @keyframes pop { from { transform: translateY(6px) scale(.97); opacity: 0; } to { transform: none; opacity: 1; } }
+  .modal .mhead { flex: none; display: flex; align-items: center; gap: 11px; padding: 14px 18px 6px; }
+  .modal .mbadge { flex: none; line-height: 0; }
+  .modal .ttl { font-size: 1.08rem; font-weight: 650; color: var(--text-strong); min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .modal .mbody { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 6px 18px 14px; }
+  .modal .mactions { flex: none; display: flex; gap: 8px; padding: 0 18px 14px; }
+  .modal .mactions .btn { flex: 1; padding: 8px 10px; }
+  .modal .mfoot { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 9px 18px; border-top: 1px solid var(--border); background: var(--panel); }
+  .modal .mfoot label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: .85rem; cursor: pointer; }
+  .modal .mfoot .more { color: var(--muted); font-size: .8rem; }
+  .modal .mfoot .spacer { flex: 1; }
+  .modal .field.full { width: 100%; padding: 8px 10px; font-size: .96rem; }
+  .btn.sm { padding: 4px 9px; font-size: .85rem; }
+  .btn .dbi { flex: none; }
+  .linkrow { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+
+  /* completion */
+  .donefile { display: flex; align-items: center; gap: 11px; padding: 8px 10px; border-radius: 8px;
+    background: var(--panel); border: 1px solid var(--border-soft); }
+  .donefile .dic { flex: none; line-height: 0; }
+  .donefile .dtx { min-width: 0; flex: 1; }
+  .fname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fmeta { color: var(--muted); font-size: .85rem; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* about */
+  .about { display: flex; gap: 14px; align-items: flex-start; font-size: .96rem; line-height: 1.6; }
+  .about img { width: 40px; height: 40px; flex: none; margin-top: 3px; }
+  .about b { color: var(--text-strong); }
+  .about .ver { color: var(--muted); font-weight: 400; }
+
+  /* update */
+  #updSub { font-weight: 600; margin-bottom: 6px; }
+  #updNotes { color: var(--muted); font-size: .9rem; white-space: pre-wrap; max-height: 180px; overflow: auto;
+    -webkit-user-select: text; user-select: text; }
+  .ubar { height: 10px; margin-top: 12px; border-radius: 5px; background: var(--prog-track); border: 1px solid var(--border-soft); overflow: hidden; }
+  .ubar > div { height: 100%; width: 0; border-radius: 5px; background: linear-gradient(90deg, var(--prog-b), var(--prog-a)); transition: width .2s; }
+  #updPhase { color: var(--muted); font-size: .82rem; margin-top: 5px; }
+
+  /* confirm (replaces the browser's confirm bar) */
+  #confirmModal { z-index: 1900; } /* stacks above Options/Scheduler/Appearance */
+  #uiModal { z-index: 1820; }      /* Appearance opens on top of Options */
+  .modal .cbody { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 14px; }
+  .modal .cmsg { font-size: .96rem; line-height: 1.5; padding-top: 5px; overflow-wrap: break-word; min-width: 0; }
+
+  /* options */
+  .orow { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; min-width: 0; }
+  .orow .olbl { color: var(--muted); width: 96px; flex: none; }
+  .orow + .hint, .ocheck + .hint { margin: 2px 0 11px; }
+  .orow.sp { margin-bottom: 11px; }
+  .pathbox { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .88rem;
+    background: var(--field); border: 1px solid var(--border); border-radius: var(--radius); padding: 5px 9px;
+    -webkit-user-select: text; user-select: text; }
+  #optConc { width: 70px; }
+  .ocheck { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; cursor: pointer; }
+  .osect { margin: 4px 0 6px; font-size: .8rem; color: var(--muted); }
+  .olist, .slist { display: flex; flex-direction: column; gap: 5px; max-height: 240px; overflow: auto; }
+  .ocat, .sitem { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .ocat .on { width: 104px; flex: none; display: flex; align-items: center; gap: 6px; }
+  .ocat .op { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .85rem; }
+  .ocat .pin { color: var(--accent); }
+  .sitem { background: var(--panel); border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 5px 8px; }
+  .sitem .sn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sitem .sw { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--yellow); font-variant-numeric: tabular-nums; }
+  .sitem .ic { line-height: 0; flex: none; }
+  .none { color: var(--muted); padding: 16px 0; text-align: center; }
+
+  /* scheduler */
+  .schedbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  #schedWhen { flex: 1; min-width: 170px; }
+  #schedSelInfo { margin: 6px 0 12px; }
+
+  /* playlist */
+  #plTitle { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pltools { display: flex; align-items: center; gap: 6px; margin: 6px 0 8px; flex-wrap: wrap; }
+  .pltools .grow { flex: 1; }
+  #plCount { color: var(--muted); font-size: .85rem; }
+  .plist { display: flex; flex-direction: column; gap: 1px; max-height: 320px; overflow: auto;
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 4px; background: var(--panel); }
+  .grabrow { display: flex; align-items: center; gap: 8px; padding: 4px 7px; border-radius: 5px; cursor: pointer;
+    transition: background-color .1s; }
+  .grabrow:hover { background: var(--hover); }
+  .grabrow .gi { color: var(--muted); font-size: .8rem; flex: none; width: 30px; text-align: right; font-variant-numeric: tabular-nums; }
+  .grabrow .gt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .plopts { display: flex; gap: 8px 16px; margin-top: 10px; flex-wrap: wrap; }
+  .plopts label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+
+  /* appearance */
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; margin: 6px 0 4px; }
+  .swatch { position: relative; display: flex; flex-direction: column; gap: 5px; padding: 5px 5px 4px;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--panel); cursor: pointer;
+    color: var(--text-dim); font-size: .85rem; text-align: left; transition: border-color .12s, box-shadow .12s; }
+  .swatch:hover { border-color: var(--accent); }
+  .swatch.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); color: var(--text-strong); font-weight: 600; }
+  .swatch .chk { position: absolute; top: -6px; right: -6px; line-height: 0; display: none; }
+  .swatch.active .chk { display: block; }
+  .thp { position: relative; height: 46px; border-radius: 5px; overflow: hidden; background: var(--p); border: 1px solid var(--border-soft); }
+  .thp i { position: absolute; display: block; }
+  .thp .b { left: 0; right: 0; top: 0; height: 11px; background: var(--c); }
+  .thp .b::after { content: ""; position: absolute; left: 5px; top: 3px; width: 5px; height: 5px; border-radius: 50%; background: var(--g); }
+  .thp .s { left: 0; top: 11px; bottom: 0; width: 25%; background: var(--c); opacity: .75; }
+  .thp .r { left: 31%; right: 7%; height: 5px; border-radius: 3px; background: var(--t); opacity: .28; }
+  .thp .r1 { top: 16px; } .thp .r3 { top: 36px; }
+  .thp .r2 { top: 24px; height: 8px; left: 29%; right: 4%; background: var(--s); opacity: 1; box-shadow: inset 2px 0 0 var(--a); }
+  .thp .g { top: 26px; left: 70%; width: 18%; height: 4px; border-radius: 2px; background: var(--g); }
+  .uirow { display: flex; align-items: center; gap: 10px; margin: 12px 0 2px; }
+  .uirow > .lbl { width: 70px; flex: none; color: var(--muted); }
+  .uirow input[type=range] { flex: 1; min-width: 0; }
+  .uirow .val { width: 44px; flex: none; text-align: right; font-variant-numeric: tabular-nums; }
+  .uicheck { display: flex; align-items: flex-start; gap: 8px; margin-top: 14px; cursor: pointer; line-height: 1.4; }
+  .uicheck input { margin-top: 2px; flex: none; }
+  .uicheck small { display: block; color: var(--muted); font-size: .8rem; }
+
+  /* ---- in-page dialog iframe (New Download / status) ---- */
+  #dlgModal .dlgframe { border: 0; border-radius: var(--radius-lg); background: var(--bg2); box-shadow: var(--shadow-lg);
+    width: min(640px, calc(100vw - 16px)); height: min(470px, calc(100vh - 16px)); animation: pop .16s ease-out; }
+  #dlgModal { padding: 8px; }
+
+  /* ---- small windows (default 763×343, min 500×280) ---- */
+  @media (max-width: 640px) {
+    .tb { min-width: 34px; padding: 4px 5px; }
+    .tb .tl { display: none; }
+    .tbsep { margin: 6px 2px; }
+    :root { --side-w: 148px; }
+    .addbar select.field { display: none; }
+  }
+  @media (max-height: 420px) {
+    .tb .dbi { width: 20px; height: 20px; }
+    .toolbar { padding: 2px 6px; }
+    .addbar { padding: 4px 7px; }
+    .empty .dbi { width: 72px; height: 60px; }
+    .emptyrow td { padding: 8px 12px; }
+  }
+  @media (max-height: 300px) { .empty .dbi { display: none; } }
+</style>
+</head>
+<body>
+  <div class="menubar" id="menubar" role="menubar"></div>
+  <div class="toolbar" id="toolbar" role="toolbar" aria-label="Actions"></div>
+
+  <form class="addbar" id="addForm">
+    <div class="urlbox">
+      <span class="ulic" data-ic="ui-link" data-sz="15"></span>
+      <input type="url" id="urlInput" class="field" placeholder="Paste a link — file, video, stream or a whole web page…" required spellcheck="false" autocomplete="off">
+    </div>
+    <select id="catSelect" class="field" title="Category"></select>
+    <select id="segSelect" class="field" title="Connections">
+      <option value="0">auto</option>
+      <option>1</option><option>2</option><option>4</option><option>8</option><option>16</option>
+    </select>
+    <button type="button" id="saveAsBtn" class="btn" title="Choose folder/name before downloading">Save as…</button>
+    <button type="submit" id="addBtn" class="btn primary" title="Add this link"><span class="bic" data-ic="ui-plus" data-sz="14"></span><span>Add</span></button>
+  </form>
+
+  <div class="layout">
+    <div class="rail"><button type="button" class="iconbtn" id="catOpen" title="Show categories"><span data-ic="ui-chevron-right" data-sz="14"></span></button></div>
+    <aside class="sidebar">
+      <div class="cattitle">Categories <button type="button" class="iconbtn" id="catClose" title="Hide categories"><span class="flip" data-ic="ui-chevron-right" data-sz="14"></span></button></div>
+      <div class="tree" id="sidebar"></div>
+    </aside>
+    <div class="main">
+      <div class="tablewrap">
+        <table class="dtable">
+          <thead><tr id="thead">
+            <th data-sort="name"   class="c-name">File Name</th>
+            <th data-sort="q"      class="c-q" title="Connections">Q</th>
+            <th data-sort="size"   class="c-size num">Size</th>
+            <th data-sort="status" class="c-status">Status</th>
+            <th data-sort="eta"    class="c-eta">Time left</th>
+            <th data-sort="date"   class="c-date">Last Try Date</th>
+            <th data-sort="desc"   class="c-desc">Description</th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="statusbar">
+    <span id="sbLeft"></span><span class="sbchip" id="sbActive" hidden></span>
+    <span class="spd" title="Total download speed"><span data-ic="ui-speed" data-sz="13"></span><span id="totalSpeed">0 B/s</span></span>
+  </div>
+
+<div class="dropdown" id="dropdown" role="menu"></div>
+<div class="dropdown" id="ctxmenu" role="menu"></div>
+
+<div class="modal-backdrop" id="doneModal">
+  <div class="modal" role="dialog" aria-labelledby="dmTitle">
+    <div class="mhead"><span class="mbadge" data-ic="md-done" data-sz="32"></span><div class="ttl" id="dmTitle">Download complete</div></div>
+    <div class="mbody">
+      <div class="donefile"><span class="dic" id="dmIcon"></span><div class="dtx"><div class="fname" id="dmName"></div><div class="fmeta" id="dmMeta"></div></div></div>
+    </div>
+    <div class="mactions">
+      <button class="btn primary" id="dmOpen"><span data-ic="ui-open" data-sz="14"></span>Open file</button>
+      <button class="btn" id="dmFolder"><span data-ic="ui-folder" data-sz="14"></span>Open folder</button>
+      <button class="btn" id="dmClose">Close</button>
+    </div>
+    <div class="mfoot">
+      <label><input type="checkbox" id="dmSuppress"> Don't show this for 2 hours</label>
+      <span class="more" id="dmMore"></span>
+    </div>
+  </div>
+</div>
+
+<!-- Appearance: theme (every window), UI size, text size, file icons. -->
+<div class="modal-backdrop" id="uiModal">
+  <div class="modal w-md" role="dialog" aria-labelledby="uiTitle">
+    <div class="mhead"><span class="mbadge" data-ic="md-ui" data-sz="32"></span><div class="ttl" id="uiTitle">Appearance</div></div>
+    <div class="mbody">
+      <div class="hint">Theme — applies to every D BOX window:</div>
+      <div class="swatches" id="uiThemes"></div>
+      <div class="uirow">
+        <span class="lbl">UI size</span>
+        <input type="range" id="uiZoom" min="80" max="150" step="5">
+        <span class="val" id="uiZoomVal"></span>
+      </div>
+      <div class="uirow">
+        <span class="lbl">Text size</span>
+        <input type="range" id="uiText" min="85" max="130" step="5">
+        <span class="val" id="uiTextVal"></span>
+      </div>
+      <label class="uicheck"><input type="checkbox" id="uiShell">
+        <span>Use Windows file icons for all completed files
+        <small>Off: D BOX's own file-type icons, with the real program icon for installers (.exe, .msi …).</small></span></label>
+      <div class="hint mt">UI &amp; text size apply to the main window. Changes save instantly.</div>
+    </div>
+    <div class="mfoot">
+      <button class="btn" id="uiReset"><span data-ic="ui-refresh" data-sz="14"></span>Reset to defaults</button>
+      <button class="btn primary" id="uiClose"><span data-ic="ui-check" data-sz="14"></span>Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- App-styled replacement for the browser's confirm() (no "127.0.0.1 says"). -->
+<div class="modal-backdrop" id="confirmModal">
+  <div class="modal w-sm" role="alertdialog" aria-describedby="cfMsg">
+    <div class="cbody"><span class="mbadge" data-ic="md-warn" data-sz="30"></span><div class="cmsg" id="cfMsg"></div></div>
+    <div class="mactions"><button id="cfOk" class="btn danger">OK</button><button id="cfCancel" class="btn">Cancel</button></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="renameModal">
+  <div class="modal" role="dialog" aria-labelledby="rnTitle">
+    <div class="mhead"><span class="mbadge" data-ic="md-edit" data-sz="32"></span><div class="ttl" id="rnTitle">Rename file</div></div>
+    <div class="mbody"><input type="text" id="rnInput" class="field full" spellcheck="false" autocomplete="off"></div>
+    <div class="mactions"><button class="btn primary" id="rnSave"><span data-ic="ui-check" data-sz="14"></span>Save</button><button class="btn" id="rnCancel">Cancel</button></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="aboutModal">
+  <div class="modal" role="dialog" aria-labelledby="abTitle">
+    <div class="mhead"><span class="mbadge" data-ic="md-about" data-sz="32"></span><div class="ttl" id="abTitle">About D BOX</div></div>
+    <div class="mbody">
+      <div class="about">
+        <img src="/icons/appicon.png" alt="">
+        <div><b>D BOX</b> <span class="ver" id="abVersion"></span> — your own segmented download manager.<br>
+        Multi-connection downloads, pause/resume, crash recovery, yt-dlp video, a link grabber and browser capture.<br>
+        Built to look &amp; feel like Internet Download Manager.</div>
+      </div>
+    </div>
+    <div class="mactions"><button class="btn" id="abCheck"><span data-ic="ui-update" data-sz="14"></span>Check for updates</button><button class="btn primary" id="abClose">OK</button></div>
+  </div>
+</div>
+
+<!-- Update-available prompt (on startup when a newer build exists, and from
+     Help → Check for updates). One-click download + swap + restart. -->
+<div class="modal-backdrop" id="updModal">
+  <div class="modal" role="dialog" aria-labelledby="updTitle">
+    <div class="mhead"><span class="mbadge" data-ic="md-update" data-sz="32"></span><div class="ttl" id="updTitle">Update available</div></div>
+    <div class="mbody">
+      <div id="updSub"></div>
+      <div id="updNotes"></div>
+      <div id="updProgWrap" hidden>
+        <div class="ubar"><div id="updBar"></div></div>
+        <div id="updPhase"></div>
+      </div>
+    </div>
+    <div class="mactions">
+      <button class="btn primary" id="updNow"><span data-ic="ui-download" data-sz="14"></span>Update now</button>
+      <button class="btn" id="updLater">Later</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="optionsModal">
+  <div class="modal w-lg" role="dialog" aria-labelledby="optTitle">
+    <div class="mhead"><span class="mbadge" data-ic="md-settings" data-sz="32"></span><div class="ttl" id="optTitle">Options</div></div>
+    <div class="mbody">
+      <div class="orow">
+        <span class="olbl">Base folder</span>
+        <span id="optBase" class="pathbox"></span>
+        <button id="optBaseBrowse" class="btn"><span data-ic="ui-folder" data-sz="14"></span>Browse…</button>
+      </div>
+      <div class="hint">New downloads are saved here, sorted into category subfolders. Existing files aren't moved.</div>
+      <div class="orow">
+        <span class="olbl">Max at once</span>
+        <input type="number" id="optConc" class="field" min="1" max="16" step="1">
+        <span class="hint">downloads running simultaneously (1 = one at a time)</span>
+      </div>
+      <div class="hint">Also controls how many “Download Later” items run at once when you click Start All.</div>
+      <div class="orow sp">
+        <span class="olbl">Appearance</span>
+        <button id="optAppearance" class="btn"><span data-ic="ui-palette" data-sz="14"></span>Appearance…</button>
+        <span class="hint">theme, UI &amp; text size, file icons</span>
+      </div>
+      <div id="optStartupWrap" hidden>
+        <label class="ocheck">
+          <input type="checkbox" id="optStartup">
+          <span>Start D BOX when Windows starts</span>
+        </label>
+        <div class="hint">Opens quietly in the tray when you sign in, ready for downloads from your browser. Untick to start it only when you open it.</div>
+      </div>
+      <label class="ocheck">
+        <input type="checkbox" id="optShutdown">
+        <span>Turn off the PC when all downloads finish</span>
+      </label>
+      <div class="hint">Waits for the whole queue — a Start All batch or a playlist — to finish, then shuts down after a 60-second warning you can cancel. Resets each time you restart D BOX.</div>
+      <label class="ocheck">
+        <input type="checkbox" id="optDev">
+        <span>Developer mode</span>
+      </label>
+      <div class="hint">Adds the Preview toolbar button (opens the New Download, status and complete windows together) and a UI shortcut.</div>
+      <div class="osect">Per-category folders (Browse to pin one — it stays even if you change the base):</div>
+      <div id="optCats" class="olist"></div>
+    </div>
+    <div class="mfoot">
+      <button id="optReset" class="btn"><span data-ic="ui-refresh" data-sz="14"></span>Reset to defaults</button>
+      <button class="btn primary" id="optClose"><span data-ic="ui-check" data-sz="14"></span>Done</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="schedModal">
+  <div class="modal w-lg" role="dialog" aria-labelledby="schedTitle">
+    <div class="mhead"><span class="mbadge" data-ic="md-schedule" data-sz="32"></span><div class="ttl" id="schedTitle">Scheduler</div></div>
+    <div class="mbody">
+      <div class="schedbar">
+        <span class="hint">Start selected at</span>
+        <input type="datetime-local" id="schedWhen" class="field">
+        <button id="schedAdd" class="btn primary"><span data-ic="ui-clock" data-sz="14"></span>Schedule selected</button>
+      </div>
+      <div id="schedSelInfo" class="hint"></div>
+      <div class="osect">Scheduled downloads (start automatically at their time):</div>
+      <div id="schedList" class="slist"></div>
+    </div>
+    <div class="mfoot">
+      <span class="spacer"></span>
+      <button class="btn primary" id="schedClose"><span data-ic="ui-check" data-sz="14"></span>Done</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="plModal">
+  <div class="modal w-xl" role="dialog" aria-labelledby="plTitle">
+    <div class="mhead"><span class="mbadge" data-ic="md-playlist" data-sz="32"></span><div class="ttl">YouTube playlist</div></div>
+    <div class="mbody">
+      <div id="plTitle"></div>
+      <div class="pltools">
+        <span id="plCount"></span>
+        <span class="grow"></span>
+        <button type="button" class="btn ghost sm" id="plSelAll"><span data-ic="ui-select-all" data-sz="14"></span>Select all</button>
+        <button type="button" class="btn ghost sm" id="plSelNone"><span data-ic="ui-select-none" data-sz="14"></span>Select none</button>
+      </div>
+      <div id="plList" class="plist"></div>
+      <div class="plopts">
+        <label><input type="checkbox" id="plAudio"> Audio only (MP3)</label>
+        <label><input type="checkbox" id="plLater"> Add to “Download Later” instead of starting now</label>
+      </div>
+    </div>
+    <div class="mactions">
+      <button class="btn primary" id="plGo"><span data-ic="ui-download" data-sz="14"></span>Download selected</button>
+      <button class="btn" id="plOne"><span data-ic="ui-video" data-sz="14"></span>Just this video</button>
+      <button class="btn" id="plCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- In-page dialog host (single-window / Wails): the New Download and status
+     pages load in this iframe instead of separate OS windows. -->
+<div class="modal-backdrop" id="dlgModal">
+  <iframe id="dlgFrame" class="dlgframe" title="D BOX dialog"></iframe>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+"use strict";
+let tasks = [];
+let filter = "all";
+let categories = [];
+let dirToCat = {};
+let extMap = {}; // file extension ("zip") -> category name ("Compressed"), from the server
+let selectedIds = new Set(); // multi-selection (Windows-style ctrl/shift click)
+let anchorId = null;         // shift-range anchor
+let shownTasks = [];         // currently displayed (filtered+sorted) rows, for range math
+let es = null;
+let allExpanded = true;
+let serverGUI = false;   // true when D BOX runs as a native app (it pops its own completion window)
+const SORT = { key: "date", dir: -1 };
+const ACTIVE = ["downloading", "queued", "scheduled", "paused", "failed"];
+
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const lsGet = (k, d) => { try { return localStorage.getItem(k) || d; } catch { return d; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+
+// ---- icons (window.DBI from /ui/icons.js) ----------------------------------
+// Guarded, so a failed icons.js load degrades to text instead of breaking the list.
+const I = (name, size, cls) => window.DBI ? DBI.icon(name, size || 16, cls) : "";
+const fileIcon = (name, size) => window.DBI ? DBI.file(name || "", size || 16) : "";
+const catIconHTML = (name, size) => window.DBI ? DBI.cat(name, size || 16) : "";
+// Static markup carries <span data-ic="md-done" data-sz="32"> placeholders.
+function fillIcons(root) {
+  (root || document).querySelectorAll("[data-ic]").forEach(el => {
+    el.innerHTML = I(el.dataset.ic, +el.dataset.sz || 16);
+    el.removeAttribute("data-ic");
+  });
+}
+fillIcons();
+
+function humanBytes(n) {
+  if (n == null || n < 0) return "?";
+  const u = ["B","KB","MB","GB","TB"]; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return n.toFixed(n >= 100 || i === 0 ? 0 : 1) + " " + u[i];
+}
+function humanSpeed(bps) { return humanBytes(bps) + "/s"; }
+function humanETA(s) {
+  if (s == null || s < 0 || !isFinite(s) || s > 359999) return ""; // hide bogus ETAs (stalled/near-0 speed)
+  s = Math.round(s);
+  if (s < 60) return s + "s";
+  if (s < 3600) return Math.floor(s/60) + "m " + (s%60) + "s";
+  return Math.floor(s/3600) + "h " + Math.floor((s%3600)/60) + "m";
+}
+const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function humanDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const hh = String(d.getHours()).padStart(2,"0"), mm = String(d.getMinutes()).padStart(2,"0");
+  return `${MON[d.getMonth()]} ${String(d.getDate()).padStart(2,"0")} ${hh}:${mm}`;
+}
+function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./,""); } catch { return ""; } }
+
+// Global on purpose: /ui/grabber.js reports through window.toast too.
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 3500);
+}
+window.toast = toast;
+async function api(method, path, body) {
+  const res = await fetch(path, { method, headers: body ? {"Content-Type":"application/json"} : undefined,
+    body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+function copyText(s) { try { navigator.clipboard.writeText(s); toast("Address copied"); } catch { toast("Copy failed"); } }
+
+// ---- categories + row icons ----------------------------------------------
+const normDir = (d) => String(d || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+const categoryOf = (t) => dirToCat[normDir(t.dir)] || "General";
+// Row icon: D BOX's own file-type icon (DBI.file) for everything, except a
+// completed installer/program on disk (exe, msi, msix, appx), which shows its
+// REAL Windows icon (the program's own artwork) from /api/icon. Appearance →
+// "Use Windows file icons for all completed files" restores the old behaviour
+// (the shell icon for every completed file). Any /api/icon error falls back.
+const SHELL_ICON_EXT = /\.(exe|msi|msix|msixbundle|appx|appxbundle)$/i;
+let shellAll = lsGet("dbox.ui.shellicons", "0") === "1";
+function rowIconHTML(t) {
+  const name = t.fileName || "";
+  if (t.status === "completed" && t.filePath && t.fileExists && (shellAll || SHELL_ICON_EXT.test(name || t.filePath))) {
+    // v= changes whenever the file on disk does, so a new download at the same
+    // path never reuses the previous file's cached icon.
+    return `<img class="ic icimg" src="/api/icon?path=${encodeURIComponent(t.filePath)}&v=${encodeURIComponent(t.fileVersion || "")}" alt="" data-fb="${esc(name || t.filePath)}" onerror="iconFallback(this)">`;
+  }
+  return `<span class="ic">${fileIcon(name || (t.live ? "live.m3u8" : t.url))}</span>`;
+}
+function iconFallback(img) {
+  img.onerror = null;
+  const s = document.createElement("span"); s.className = "ic"; s.innerHTML = fileIcon(img.dataset.fb || "");
+  img.replaceWith(s);
+}
+
+async function loadCategories() {
+  try {
+    const data = await api("GET", "/api/categories");
+    categories = data.categories || [];
+    extMap = data.extMap || {};
+    serverGUI = !!data.gui;
+    dirToCat = {};
+    for (const c of categories) dirToCat[normDir(c.dir)] = c.name;
+    const sel = $("#catSelect"); sel.innerHTML = "";
+    for (const c of categories) {
+      const o = document.createElement("option"); o.value = c.name; o.textContent = c.name; sel.appendChild(o);
+    }
+  } catch (_) {}
+  render(); // re-render the TABLE too: rows need dirToCat for their categories
+}
+
+function counts() {
+  const c = { all: tasks.length, unfinished: 0, finished: 0, later: 0, cat: {} };
+  for (const t of tasks) {
+    if (t.later && t.status !== "completed") c.later++;          // the Download Later queue
+    else if (ACTIVE.includes(t.status)) c.unfinished++;          // keep the two views distinct
+    if (t.status === "completed") c.finished++;
+    const k = categoryOf(t); c.cat[k] = (c.cat[k] || 0) + 1;
+  }
+  return c;
+}
+// expanded: undefined = no expander; true/false = the node's state.
+function trow(key, ico, lbl, n, cls, expanded) {
+  const active = filter === key ? " active" : "";
+  const arr = expanded !== undefined
+    ? `<span class="tw" data-toggle="1" title="${expanded ? "Collapse" : "Expand"}">${I(expanded ? "ui-chevron-down" : "ui-chevron-right", 11)}</span>`
+    : `<span class="tw"></span>`;
+  return `<div class="trow${active} ${cls||""}" data-f="${esc(key)}" tabindex="0" role="button"${active ? ' aria-current="true"' : ""}>${arr}<span class="tico">${ico}</span><span class="tlbl">${esc(lbl)}</span><span class="tcnt${n ? "" : " z"}">${n}</span></div>`;
+}
+function renderSidebar() {
+  const c = counts();
+  const focused = document.activeElement && document.activeElement.closest && document.activeElement.closest("#sidebar .trow");
+  const focusKey = focused ? focused.dataset.f : null;
+  let kids = "";
+  for (const cat of categories) kids += trow("cat:" + cat.name, catIconHTML(cat.name), cat.name, c.cat[cat.name] || 0, "child");
+  let html = `<div class="tnode${allExpanded ? "" : " collapsed"}">`;
+  html += trow("all", I("view-all"), "All Downloads", c.all, "", allExpanded);
+  html += `<div class="tchildren">${kids}</div></div>`;
+  html += trow("unfinished", I("view-unfinished"), "Unfinished", c.unfinished);
+  html += trow("finished", I("view-finished"), "Finished", c.finished);
+  html += trow("later", I("view-later"), "Download Later", c.later);
+  $("#sidebar").innerHTML = html;
+  if (focusKey) { const el = [...document.querySelectorAll("#sidebar .trow")].find(r => r.dataset.f === focusKey); if (el) el.focus(); }
+}
+
+// ---- sorting -------------------------------------------------------------
+const STATUS_RANK = { downloading: 0, queued: 1, scheduled: 2, paused: 3, failed: 4, completed: 5 };
+function sortVal(t, key) {
+  switch (key) {
+    case "name":   return (t.fileName || t.url || "").toLowerCase();
+    case "q":      return t.status === "downloading" ? (t.segments || []).length : -1;
+    case "size":   return t.size < 0 ? -1 : t.size;
+    case "status": return STATUS_RANK[t.status] ?? 9;
+    case "eta":    return (t.status === "downloading" && t.eta >= 0) ? t.eta : Infinity;
+    case "speed":  return t.status === "downloading" ? (t.speed || 0) : -1;
+    case "date":   return Date.parse(t.completedAt || t.createdAt) || 0;
+    case "desc":   return (t.description || hostOf(t.url)).toLowerCase();
+  }
+  return 0;
+}
+function compareTasks(a, b) {
+  const va = sortVal(a, SORT.key), vb = sortVal(b, SORT.key);
+  let c = (typeof va === "string") ? va.localeCompare(vb) : (va < vb ? -1 : va > vb ? 1 : 0);
+  if (c === 0) return -((Date.parse(a.completedAt||a.createdAt)||0) - (Date.parse(b.completedAt||b.createdAt)||0));
+  return c * SORT.dir;
+}
+function applySortHeader() {
+  document.querySelectorAll("#thead th").forEach(th => {
+    if (!th.dataset.label) th.dataset.label = th.textContent.trim();
+    const on = th.dataset.sort === SORT.key;
+    const want = on ? (SORT.dir > 0 ? "up" : "down") : "none";
+    th.classList.toggle("sorted", on);
+    if (th.dataset.arr === want) return; // unchanged — skip the DOM churn on every poll
+    th.dataset.arr = want;
+    th.setAttribute("aria-sort", on ? (SORT.dir > 0 ? "ascending" : "descending") : "none");
+    th.innerHTML = esc(th.dataset.label) + (on ? `<span class="arr${SORT.dir > 0 ? " up" : ""}">${I("ui-chevron-down", 10)}</span>` : "");
+  });
+}
+
+// ---- table ---------------------------------------------------------------
+const pctOf = (t) => t.progress >= 0 ? Math.min(100, t.progress * 100) : -1;
+const stHTML = (icon, text, cls) => `<span class="st ${cls}">${I(icon, 14)}<span>${esc(text)}</span></span>`;
+const pillHTML = (p, text, cls) => `<div class="pill${cls ? " " + cls : ""}"><div class="fill" style="width:${p.toFixed(1)}%"></div><span>${esc(text)}</span></div>`;
+function statusHTML(t) {
+  // Skip/Later tags only describe HELD items — a held task the user manually
+  // started must show its live download state, not the stale tag.
+  const held = t.status === "paused" || t.status === "failed";
+  if (t.later && t.skip && held) return stHTML("st-skipped", "Skipped", "skipped");
+  if (t.later && held) return stHTML("st-later", "Later", "later");
+  const p = pctOf(t);
+  switch (t.status) {
+    case "downloading":
+      if (t.live) return stHTML("st-live", t.note || "Recording", "live");
+      // unknown total → an animated striped pill with what's happening
+      if (p < 0) return `<div class="pill indet"><span>${esc(t.note || "Receiving…")}</span></div>`;
+      // "Connecting…", "Merging…", "Getting ffmpeg… 40%" notes ride in the pill
+      return pillHTML(p, t.note || p.toFixed(1) + "%", p < 1 ? "empty" : "");
+    case "queued":    return stHTML("st-queued", "Queued", "queued");
+    case "scheduled": return stHTML("st-scheduled", t.scheduledAt ? humanDate(t.scheduledAt) : "Scheduled", "scheduled");
+    case "paused":    return p > 0 ? pillHTML(p, "Paused " + p.toFixed(0) + "%", "paused") : stHTML("st-paused", "Paused", "paused");
+    case "completed": return t.fileExists ? stHTML("st-completed", "Complete", "completed") : stHTML("st-completed", "Complete*", "completed missing");
+    case "failed":    return p > 0 ? pillHTML(p, "Error " + p.toFixed(0) + "%", "failed") : stHTML("st-failed", "Error", "failed");
+  }
+  return `<span class="st">${esc(t.status)}</span>`;
+}
+function rowHTML(t) {
+  // "~" marks an estimate (streams); with no total at all, show what has arrived.
+  const size = t.size > 0 ? ((t.sizeEstimated && t.status !== "completed" ? "~" : "") + humanBytes(t.size))
+    : (t.status === "completed" || t.downloaded > 0 ? humanBytes(t.downloaded) : "");
+  const eta = t.status === "downloading" ? humanETA(t.eta) : "";
+  const q = t.status === "downloading" ? (t.segments || []).length : "";
+  const sel = selectedIds.has(t.id) ? " selected" : "";
+  const skip = t.skip ? " skip" : "";
+  const later = t.later ? " later" : "";
+  const tip = t.status === "failed" ? (t.error || "")
+    : (t.status === "completed" && !t.fileExists ? "The file was moved or deleted" : "");
+  return `<tr class="row ${esc(t.status)}${sel}${skip}${later}" data-id="${esc(t.id)}">
+    <td class="c-name" title="${esc(t.fileName || t.url)}">${t.skip ? `<span class="skipmark" title="Will be skipped by Start All">${I("st-skipped", 14)}</span>` : ""}${rowIconHTML(t)}${esc(t.fileName || "(resolving…)")}</td>
+    <td class="c-q">${q}</td>
+    <td class="c-size num">${size}</td>
+    <td class="c-status" title="${esc(tip)}">${statusHTML(t)}</td>
+    <td class="c-eta">${eta}</td>
+    <td class="c-date">${esc(humanDate(t.completedAt || t.createdAt))}</td>
+    <td class="c-desc" title="${esc(t.description || t.url)}">${esc(t.description || hostOf(t.url))}</td>
+  </tr>`;
+}
+function filterFn(t) {
+  if (filter === "later") return t.later && t.status !== "completed";
+  if (filter === "unfinished") return ACTIVE.includes(t.status) && !t.later;
+  if (filter === "finished") return t.status === "completed";
+  if (filter.startsWith("cat:")) return categoryOf(t) === filter.slice(4);
+  return true;
+}
+function filterLabel() {
+  if (filter === "all") return "All Downloads";
+  if (filter === "unfinished") return "Unfinished";
+  if (filter === "finished") return "Finished";
+  if (filter === "later") return "Download Later";
+  if (filter.startsWith("cat:")) return filter.slice(4);
+  return "All";
+}
+function emptyHTML() {
+  if (filter === "all") return `<div class="empty">${I("ill-empty", 120)}<div class="e1">No downloads yet</div>` +
+    `<div class="e2">Paste a link above — a file, a video, a stream or a whole web page</div></div>`;
+  return `<div class="empty">${I("ill-nothing", 120)}<div class="e1">Nothing in ${esc(filterLabel())}</div>` +
+    `<div class="e2">Downloads appear here as soon as they match this view</div></div>`;
+}
+function render() {
+  renderSidebar();
+  applySortHeader();
+  for (const id of [...selectedIds]) if (!tasks.some(t => t.id === id)) selectedIds.delete(id); // drop deleted
+  shownTasks = tasks.filter(filterFn).sort(compareTasks);
+  const shown = shownTasks;
+
+  let totalSpeed = 0, active = 0, only = null;
+  for (const t of tasks) if (t.status === "downloading") { totalSpeed += t.speed || 0; active++; only = t; }
+  // One active download → show its avg/max/min live; several → just the total.
+  $("#totalSpeed").textContent = (active === 1 && only)
+    ? `${humanSpeed(only.speed||0)}  ·  avg ${humanSpeed(only.speedAvg||0)}  ·  max ${humanSpeed(only.speedMax||0)}` +
+      (only.speedMin > 0 ? `  ·  min ${humanSpeed(only.speedMin)}` : "")
+    : humanSpeed(totalSpeed);
+  $("#sbLeft").textContent = `${filterLabel()} — ${shown.length} item${shown.length === 1 ? "" : "s"}`;
+  const chip = $("#sbActive"); chip.hidden = !active; chip.textContent = active ? `${active} downloading` : "";
+
+  $("#rows").innerHTML = shown.length
+    ? shown.map(rowHTML).join("")
+    : `<tr class="emptyrow"><td colspan="7">${emptyHTML()}</td></tr>`;
+
+  if (schedOpen) renderScheduler(); // keep the open scheduler list in sync with live updates
+}
+
+// ---- Appearance: theme / UI size / text size / file icons -----------------
+// The theme is saved server-side (POST /api/settings/ui) so every window —
+// including the New Download / status / complete popups, which are separate
+// processes — paints it; localStorage is only this window's pre-paint cache.
+const devMode = () => lsGet("dbox.dev", "0") === "1";
+// Swatch previews use each theme's real colours (see /ui/theme.css):
+// c = chrome (--bg), p = list (--panel), s = selection, a = accent, g = progress, t = text.
+const THEMES = [
+  { id: "slate",    name: "Slate",        c: "#262b32", p: "#1f2329", s: "#203f60", a: "#5aa7f5", g: "#3fd07a", t: "#e3e7ed" },
+  { id: "midnight", name: "Midnight",     c: "#1a1d23", p: "#14171c", s: "#1b3552", a: "#64a8f0", g: "#3fd07a", t: "#dfe3e8" },
+  { id: "ocean",    name: "Ocean",        c: "#1d2c35", p: "#16232b", s: "#1d4b5a", a: "#4fc3d9", g: "#40c9de", t: "#dcedf2" },
+  { id: "forest",   name: "Forest",       c: "#232b24", p: "#1c231d", s: "#2f4f35", a: "#7cc47f", g: "#3fd07a", t: "#e2e8e0" },
+  { id: "classic",  name: "Classic gray", c: "#3c4043", p: "#303336", s: "#3f5e80", a: "#6aa6e6", g: "#63c272", t: "#e6e6e6" },
+  { id: "light",    name: "Light",        c: "#eef0f3", p: "#ffffff", s: "#d4e6fa", a: "#1f6fd0", g: "#3cc774", t: "#1f2328" },
+];
+const normTheme = (id) => (!id || id === "graphite" || id === "default") ? "slate" : id;
+const curTheme = () => normTheme(document.documentElement.getAttribute("data-theme"));
+let curZoom = +lsGet("dbox.ui.zoom", "100") || 100;
+let curText = +lsGet("dbox.ui.text", "100") || 100;
+let uiSaveTimer = null, uiPending = {};
+function saveUI(part, now) {
+  Object.assign(uiPending, part);
+  clearTimeout(uiSaveTimer);
+  const send = () => { const body = uiPending; uiPending = {}; api("POST", "/api/settings/ui", body).catch(() => {}); };
+  if (now) send(); else uiSaveTimer = setTimeout(send, 300);
+}
+function applyTheme(id, fromServer) {
+  id = normTheme(id);
+  if (!THEMES.some(t => t.id === id)) id = "slate";
+  document.documentElement.setAttribute("data-theme", id);
+  lsSet("dbox.ui.theme", id);
+  if (!fromServer) saveUI({ theme: id }, true);
+}
+function applyZoom(pct, fromServer) {
+  curZoom = pct;
+  document.documentElement.style.zoom = pct === 100 ? "" : String(pct / 100);
+  lsSet("dbox.ui.zoom", String(pct));
+  if (!fromServer) saveUI({ zoom: pct });
+}
+function applyText(pct, fromServer) {
+  curText = pct;
+  window.__applyTextSize(pct); // defined in the pre-paint head script
+  lsSet("dbox.ui.text", String(pct));
+  if (!fromServer) saveUI({ text: pct });
+}
+function setShellIcons(on) {
+  shellAll = !!on;
+  lsSet("dbox.ui.shellicons", on ? "1" : "0");
+  render();
+}
+function renderUIPanel() {
+  const cur = curTheme();
+  $("#uiThemes").innerHTML = THEMES.map(t => `
+    <button type="button" class="swatch${t.id === cur ? " active" : ""}" data-th="${t.id}" aria-pressed="${t.id === cur}">
+      <span class="thp" style="--c:${t.c};--p:${t.p};--s:${t.s};--a:${t.a};--g:${t.g};--t:${t.t}"><i class="b"></i><i class="s"></i><i class="r r1"></i><i class="r r2"></i><i class="g"></i><i class="r r3"></i></span>
+      <span>${esc(t.name)}${t.id === "slate" ? " (default)" : ""}</span><span class="chk">${I("st-completed", 16)}</span>
+    </button>`).join("");
+  $("#uiZoom").value = curZoom; $("#uiZoomVal").textContent = curZoom + "%";
+  $("#uiText").value = curText; $("#uiTextVal").textContent = curText + "%";
+  $("#uiShell").checked = shellAll;
+}
+function openUI() { renderUIPanel(); $("#uiModal").classList.add("show"); }
+function closeUI() { $("#uiModal").classList.remove("show"); }
+$("#uiThemes").addEventListener("click", (e) => {
+  const sw = e.target.closest("[data-th]"); if (!sw) return;
+  applyTheme(sw.dataset.th); renderUIPanel();
+  const f = $(`#uiThemes [data-th="${sw.dataset.th}"]`); if (f) f.focus();
+});
+$("#uiZoom").addEventListener("input", () => { const v = +$("#uiZoom").value; $("#uiZoomVal").textContent = v + "%"; applyZoom(v); });
+$("#uiText").addEventListener("input", () => { const v = +$("#uiText").value; $("#uiTextVal").textContent = v + "%"; applyText(v); });
+$("#uiShell").addEventListener("change", () => setShellIcons($("#uiShell").checked));
+$("#uiReset").addEventListener("click", () => {
+  applyTheme("slate"); applyZoom(100); applyText(100); setShellIcons(false); renderUIPanel(); toast("Appearance reset to defaults");
+});
+$("#uiClose").addEventListener("click", closeUI);
+$("#uiModal").addEventListener("click", (e) => { if (e.target === $("#uiModal")) closeUI(); });
+// Adopt the shared (server-side) appearance; on the first run with it, carry
+// this window's older localStorage choice over once.
+(async () => {
+  try {
+    const s = await api("GET", "/api/settings/ui");
+    if (!s || !s.saved) {
+      const t = normTheme(lsGet("dbox.ui.theme", "")), body = {};
+      if (t !== "slate" && THEMES.some(x => x.id === t)) { applyTheme(t, true); body.theme = t; }
+      if (curZoom !== 100) body.zoom = curZoom;
+      if (curText !== 100) body.text = curText;
+      if (Object.keys(body).length) saveUI(body, true);
+      return;
+    }
+    if (normTheme(s.theme) !== curTheme()) applyTheme(s.theme, true); else lsSet("dbox.ui.theme", normTheme(s.theme));
+    if (s.zoom && s.zoom !== curZoom) applyZoom(s.zoom, true);
+    if (s.text && s.text !== curText) applyText(s.text, true);
+    if ($("#uiModal").classList.contains("show")) renderUIPanel();
+  } catch (_) {}
+})();
+
+// ---- app-styled confirm (replaces window.confirm) --------------------------
+// Promise<boolean>; okLabel names the destructive action ("Delete", "Exit"…).
+// Enter confirms (the OK button holds focus), Escape/backdrop/Cancel decline.
+let cfResolve = null;
+function askConfirm(msg, okLabel) {
+  return new Promise((resolve) => {
+    if (cfResolve) cfResolve(false); // a new ask supersedes an unanswered one
+    cfResolve = resolve;
+    $("#cfMsg").textContent = msg;
+    $("#cfOk").textContent = okLabel || "OK";
+    $("#confirmModal").classList.add("show");
+    $("#cfOk").focus();
+  });
+}
+function closeConfirm(val) {
+  $("#confirmModal").classList.remove("show");
+  const r = cfResolve; cfResolve = null;
+  if (r) r(!!val);
+}
+$("#cfOk").addEventListener("click", () => closeConfirm(true));
+$("#cfCancel").addEventListener("click", () => closeConfirm(false));
+$("#confirmModal").addEventListener("click", (e) => { if (e.target === $("#confirmModal")) closeConfirm(false); });
+
+// ---- task actions --------------------------------------------------------
+window.doPause  = (id) => api("POST", `/api/tasks/${id}/pause`).catch(e => toast(e.message));
+window.doResume = (id) => api("POST", `/api/tasks/${id}/resume`).catch(e => toast(e.message));
+window.doReveal = (id) => api("POST", `/api/tasks/${id}/reveal`).catch(e => toast(e.message));
+window.doOpen   = (id) => api("POST", `/api/tasks/${id}/open`).catch(e => toast(e.message));
+
+let renameId = null;
+window.doRename = (id) => {
+  const t = tasks.find(x => x.id === id); if (!t) return;
+  renameId = id; $("#rnInput").value = t.fileName || "";
+  $("#renameModal").classList.add("show"); $("#rnInput").focus();
+  // select the name without its extension, like Explorer
+  const v = $("#rnInput").value, dot = v.lastIndexOf(".");
+  if (dot > 0) $("#rnInput").setSelectionRange(0, dot); else $("#rnInput").select();
+};
+function closeRename() { $("#renameModal").classList.remove("show"); renameId = null; }
+$("#rnCancel").addEventListener("click", closeRename);
+$("#rnSave").addEventListener("click", async () => {
+  if (!renameId) return;
+  const name = $("#rnInput").value.trim();
+  if (!name) { toast("Enter a file name"); return; }
+  try { await api("POST", `/api/tasks/${renameId}/rename`, { name }); closeRename(); } catch (e) { toast(e.message); }
+});
+$("#rnInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#rnSave").click(); else if (e.key === "Escape") closeRename(); });
+$("#renameModal").addEventListener("click", (e) => { if (e.target === $("#renameModal")) closeRename(); });
+
+window.doMove = async (id) => {
+  const t = tasks.find(x => x.id === id); if (!t) return;
+  let dir;
+  if (typeof window.myidmPickFolder === "function") { try { dir = await window.myidmPickFolder(t.dir || ""); } catch { dir = ""; } }
+  else dir = prompt("Move to folder (full path):", t.dir || "");
+  if (!dir) return;
+  try { await api("POST", `/api/tasks/${id}/move`, { dir }); } catch (e) { toast(e.message); }
+};
+window.doDelete = async (id, removeFile, confirmFile) => {
+  const t = tasks.find(x => x.id === id);
+  const msg = confirmFile ? `Delete "${t?.fileName}" AND its file on disk?`
+    : (t?.status === "completed" ? `Remove "${t?.fileName}" from the list? (file stays on disk)` : `Cancel and remove "${t?.fileName || t?.url}"?`);
+  if (!await askConfirm(msg, confirmFile ? "Delete" : "Remove")) return;
+  api("DELETE", `/api/tasks/${id}?file=${removeFile && (confirmFile || t?.status !== "completed") ? 1 : 0}`).catch(e => toast(e.message));
+};
+
+// ---- toolbar / menu actions ----------------------------------------------
+const selectedTasks = () => shownTasks.filter(t => selectedIds.has(t.id));
+const selectedTask = () => { const s = selectedTasks(); return s.length ? s[0] : undefined; };
+async function deleteSelected(sel) {
+  if (!sel.length) return;
+  const msg = sel.length === 1
+    ? (sel[0].status === "completed" ? `Remove "${sel[0].fileName}" from the list? (file stays on disk)`
+                                     : `Cancel and remove "${sel[0].fileName || sel[0].url}"?`)
+    : `Remove ${sel.length} selected downloads from the list? (files stay on disk)`;
+  if (!await askConfirm(msg, "Remove")) return;
+  sel.forEach(t => api("DELETE", `/api/tasks/${t.id}?file=0`).catch(e => toast(e.message)));
+  selectedIds.clear();
+}
+function focusAdd() { $("#urlInput").focus(); $("#urlInput").select(); }
+function saveAs() { $("#saveAsBtn").click(); }
+function resumeAll() {
+  // Held "Download Later" items are excluded — they only start from their own
+  // view (Start / Start All), otherwise a blanket Resume would drain the queue.
+  const r = tasks.filter(t => (t.status === "paused" || t.status === "failed") && !t.later);
+  if (!r.length) { toast("Nothing to resume"); return; }
+  r.forEach(t => doResume(t.id));
+}
+function stopAll() {
+  const a = tasks.filter(t => t.status === "downloading" || t.status === "queued");
+  if (!a.length) { toast("Nothing is downloading"); return; }
+  a.forEach(t => doPause(t.id));
+}
+async function deleteCompleted() {
+  const done = tasks.filter(t => t.status === "completed");
+  if (!done.length) { toast("No completed downloads"); return; }
+  if (!await askConfirm(`Remove ${done.length} completed entr${done.length > 1 ? "ies" : "y"} from the list? (files stay on disk)`, "Remove")) return;
+  done.forEach(t => api("DELETE", `/api/tasks/${t.id}?file=0`).catch(() => {}));
+}
+function toggleSidebar() {
+  const off = document.body.classList.toggle("cats-collapsed");
+  lsSet("dbox.ui.cats", off ? "0" : "1");
+}
+if (lsGet("dbox.ui.cats", "1") === "0") document.body.classList.add("cats-collapsed");
+// Switch the active view; the toolbar swaps to the queue actions on "later".
+function setFilter(key) { filter = key; renderToolbar(); render(); }
+function showAbout() { $("#aboutModal").classList.add("show"); }
+$("#abClose").addEventListener("click", () => $("#aboutModal").classList.remove("show"));
+$("#aboutModal").addEventListener("click", (e) => { if (e.target === $("#aboutModal")) $("#aboutModal").classList.remove("show"); });
+$("#abCheck").addEventListener("click", () => { $("#aboutModal").classList.remove("show"); checkForUpdates(true); });
+function openGrabber() {
+  if (window.DBGrab) DBGrab.openPaste();
+  else toast("The Link Grabber didn't load — reopen D BOX");
+}
+
+// ---- self-update ----------------------------------------------------------
+// Checks the static latest.json (no server needed) and, on one click, downloads
+// the new build, swaps this exe and restarts. Runs once automatically at startup
+// and on demand from Help → Check for updates / the About dialog.
+let updRel = null, updPoll = null;
+function closeUpd() { $("#updModal").classList.remove("show"); if (updPoll) { clearInterval(updPoll); updPoll = null; } }
+async function checkForUpdates(interactive) {
+  try {
+    const r = await api("GET", "/api/update/check");
+    if (!r.enabled) { if (interactive) toast("Auto-update isn't configured for this build"); return; }
+    if (r.error) { if (interactive) toast("Update check failed: " + r.error); return; }
+    if (!r.available) { if (interactive) toast(`You're up to date (v${r.current})`); return; }
+    updRel = r;
+    $("#updTitle").textContent = "Update available";
+    $("#updSub").textContent = `D BOX v${r.latest} is available` + (r.current ? ` — you have v${r.current}` : "");
+    $("#updNotes").textContent = (r.notes || "") + (r.date ? `\n\nReleased ${r.date}` : "");
+    $("#updProgWrap").hidden = true;
+    $("#updBar").style.width = "0";
+    $("#updNow").disabled = false;
+    $("#updLater").hidden = !!r.mandatory;
+    $("#updModal").classList.add("show");
+  } catch (e) { if (interactive) toast("Update check failed: " + e.message); }
+}
+$("#updLater").addEventListener("click", closeUpd);
+$("#updModal").addEventListener("click", (e) => { if (e.target === $("#updModal") && !$("#updLater").hidden) closeUpd(); });
+$("#updNow").addEventListener("click", async () => {
+  $("#updNow").disabled = true;
+  $("#updProgWrap").hidden = false;
+  $("#updPhase").textContent = "Starting…";
+  try { await api("POST", "/api/update/apply"); } catch (e) { toast("Update failed: " + e.message); $("#updNow").disabled = false; return; }
+  if (updPoll) clearInterval(updPoll);
+  updPoll = setInterval(async () => {
+    try {
+      const s = await api("GET", "/api/update/status");
+      const pct = s.total > 0 ? Math.min(100, Math.round(s.downloaded / s.total * 100)) : null;
+      if (s.phase === "downloading") { $("#updBar").style.width = (pct ?? 30) + "%"; $("#updPhase").textContent = pct != null ? `Downloading… ${pct}%` : "Downloading…"; }
+      else if (s.phase === "verifying") { $("#updBar").style.width = "92%"; $("#updPhase").textContent = "Verifying…"; }
+      else if (s.phase === "swapping") { $("#updBar").style.width = "96%"; $("#updPhase").textContent = "Installing…"; }
+      else if (s.phase === "restarting" || s.phase === "done") { $("#updBar").style.width = "100%"; $("#updPhase").textContent = "Restarting D BOX…"; }
+      else if (s.phase === "error") { clearInterval(updPoll); updPoll = null; $("#updPhase").textContent = "Failed: " + (s.error || "unknown"); $("#updNow").disabled = false; toast("Update failed: " + (s.error || "unknown")); }
+    } catch (_) { /* the app is restarting — the connection drop is expected */ }
+  }, 400);
+});
+
+// ---- Options: download folders -------------------------------------------
+let optState = null;
+async function openOptions() { $("#optionsModal").classList.add("show"); await loadOptions(); }
+function closeOptions() { $("#optionsModal").classList.remove("show"); }
+async function loadOptions() {
+  try { optState = await api("GET", "/api/settings"); renderOptions(); } catch (e) { toast(e.message); }
+}
+function renderOptions() {
+  if (!optState) return;
+  $("#optBase").textContent = optState.downloadDir || "";
+  $("#optBase").title = optState.downloadDir || "";
+  if (optState.maxConcurrent) $("#optConc").value = optState.maxConcurrent;
+  $("#optShutdown").checked = !!optState.shutdownWhenDone;
+  $("#optStartupWrap").hidden = !optState.startWithWindowsSupported;
+  $("#optStartup").checked = !!optState.startWithWindows;
+  $("#optDev").checked = devMode();
+  const cats = optState.categories || {}, custom = optState.custom || {};
+  const names = Object.keys(cats).sort((a, b) => a === "General" ? -1 : b === "General" ? 1 : a.localeCompare(b));
+  $("#optCats").innerHTML = names.map(n => `
+    <div class="ocat">
+      <span class="on">${catIconHTML(n)}${esc(n)}</span>
+      <span class="op" title="${esc(cats[n])}">${esc(cats[n])}${custom[n] ? ' <span class="pin">• pinned</span>' : ''}</span>
+      <button class="btn sm" data-cat="${esc(n)}">${I("ui-folder", 13)}Browse…</button>
+    </div>`).join("");
+}
+async function pickFolder(initial) {
+  // native chooser via the server; "" if cancelled or no native picker
+  try { const r = await api("POST", "/api/pick-folder", { initial: initial || "" }); return r.path || ""; }
+  catch { return ""; }
+}
+function afterSettingsChange(data, msg) { optState = data; renderOptions(); loadCategories(); render(); if (msg) toast(msg); }
+$("#optBaseBrowse").addEventListener("click", async () => {
+  const p = await pickFolder(optState && optState.downloadDir);
+  if (!p) return;
+  try { afterSettingsChange(await api("POST", "/api/settings/dir", { dir: p }), "Download folder updated"); }
+  catch (e) { toast(e.message); }
+});
+$("#optCats").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-cat]"); if (!b) return;
+  const cat = b.dataset.cat;
+  const p = await pickFolder((optState && optState.categories || {})[cat]);
+  if (!p) return;
+  try { afterSettingsChange(await api("POST", "/api/settings/category", { category: cat, dir: p }), cat + " folder pinned"); }
+  catch (e) { toast(e.message); }
+});
+$("#optConc").addEventListener("change", async () => {
+  let n = parseInt($("#optConc").value, 10);
+  if (!Number.isFinite(n)) { renderOptions(); return; }
+  n = Math.max(1, Math.min(16, n));
+  $("#optConc").value = n;
+  try { afterSettingsChange(await api("POST", "/api/settings/concurrent", { n }), `Up to ${n} download${n === 1 ? "" : "s"} at once`); }
+  catch (e) { toast(e.message); }
+});
+$("#optDev").addEventListener("change", () => {
+  lsSet("dbox.dev", $("#optDev").checked ? "1" : "0");
+  renderToolbar(); // Preview + UI buttons appear/vanish immediately
+  toast($("#optDev").checked ? "Developer mode on — Preview & UI buttons added to the toolbar" : "Developer mode off");
+});
+$("#optAppearance").addEventListener("click", openUI); // stacks above Options
+$("#optStartup").addEventListener("change", async () => {
+  const on = $("#optStartup").checked;
+  try {
+    optState = await api("POST", "/api/settings/startup", { on });
+    renderOptions(); // shows what Windows will really do
+    toast(on ? "D BOX will start when Windows starts" : "D BOX won't start with Windows");
+  } catch (e) { toast(e.message); $("#optStartup").checked = !on; }
+});
+$("#optShutdown").addEventListener("change", async () => {
+  const on = $("#optShutdown").checked;
+  try {
+    optState = await api("POST", "/api/settings/shutdown", { on });
+    toast(on ? "PC will turn off when all downloads finish" : "Auto shutdown off");
+  } catch (e) { toast(e.message); $("#optShutdown").checked = !on; }
+});
+$("#optReset").addEventListener("click", async () => {
+  if (!await askConfirm("Reset the base folder and all pinned category folders to defaults? Existing files stay where they are.", "Reset")) return;
+  try { afterSettingsChange(await api("POST", "/api/settings/reset"), "Paths reset to defaults"); }
+  catch (e) { toast(e.message); }
+});
+$("#optClose").addEventListener("click", closeOptions);
+$("#optionsModal").addEventListener("click", (e) => { if (e.target === $("#optionsModal")) closeOptions(); });
+
+// ---- scheduler -----------------------------------------------------------
+// Schedule a download to start at a future time. Selected paused/queued/failed
+// rows can be scheduled here; the New Download window also has a "Schedule"
+// field. Scheduled tasks sit in "scheduled" state and auto-queue at their time.
+let schedOpen = false;
+const SCHEDULABLE = ["paused", "failed", "queued", "scheduled"];
+function localDTValue(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function openScheduler() {
+  schedOpen = true;
+  $("#schedWhen").value = localDTValue(new Date(Date.now() + 3600 * 1000)); // default: +1 hour
+  $("#schedModal").classList.add("show");
+  renderScheduler();
+}
+function closeScheduler() { schedOpen = false; $("#schedModal").classList.remove("show"); }
+function renderScheduler() {
+  if (!schedOpen) return;
+  const sel = selectedTasks().filter(t => SCHEDULABLE.includes(t.status));
+  $("#schedSelInfo").textContent = sel.length
+    ? `${sel.length} selected download${sel.length === 1 ? "" : "s"} will start at the time above.`
+    : "Tip: select paused or queued downloads in the list before opening this, then set a time.";
+  $("#schedAdd").disabled = !sel.length;
+  const scheduled = tasks.filter(t => t.status === "scheduled")
+    .sort((a, b) => (Date.parse(a.scheduledAt) || 0) - (Date.parse(b.scheduledAt) || 0));
+  $("#schedList").innerHTML = scheduled.length ? scheduled.map(t => `
+    <div class="sitem">
+      <span class="ic">${fileIcon(t.fileName || t.url)}</span>
+      <span class="sn" title="${esc(t.fileName || t.url)}">${esc(t.fileName || t.url)}</span>
+      <span class="sw">${I("ui-clock", 13)}${esc(humanDate(t.scheduledAt))}</span>
+      <button class="btn sm" data-sstart="${esc(t.id)}">${I("ui-play", 12)}Start now</button>
+      <button class="btn sm" data-scancel="${esc(t.id)}">Cancel</button>
+    </div>`).join("")
+    : `<div class="none">No scheduled downloads yet.</div>`;
+}
+$("#schedAdd").addEventListener("click", async () => {
+  const v = $("#schedWhen").value; if (!v) { toast("Pick a date and time"); return; }
+  const at = new Date(v).getTime();
+  if (!at || at < Date.now()) { toast("Pick a time in the future"); return; }
+  const sel = selectedTasks().filter(t => SCHEDULABLE.includes(t.status));
+  if (!sel.length) { toast("Select a download to schedule first"); return; }
+  try { for (const t of sel) await api("POST", `/api/tasks/${t.id}/schedule`, { at }); toast(`Scheduled ${sel.length} download${sel.length === 1 ? "" : "s"}`); renderScheduler(); }
+  catch (e) { toast(e.message); }
+});
+$("#schedList").addEventListener("click", async (e) => {
+  const s = e.target.closest("[data-sstart]"), c = e.target.closest("[data-scancel]");
+  try {
+    if (s) { await api("POST", `/api/tasks/${s.dataset.sstart}/schedule`, { at: 0 }); await api("POST", `/api/tasks/${s.dataset.sstart}/resume`); toast("Started"); }
+    else if (c) { await api("POST", `/api/tasks/${c.dataset.scancel}/schedule`, { at: 0 }); toast("Schedule cancelled"); }
+    else return;
+    renderScheduler();
+  } catch (err) { toast(err.message); }
+});
+$("#schedClose").addEventListener("click", closeScheduler);
+$("#schedModal").addEventListener("click", (e) => { if (e.target === $("#schedModal")) closeScheduler(); });
+
+function doAct(act) {
+  switch (act) {
+    case "add": focusAdd(); break;
+    case "saveas": saveAs(); break;
+    case "grab": openGrabber(); break;
+    case "resume": { const s = selectedTasks().filter(x => x.status === "paused" || x.status === "failed");
+                     if (s.length) s.forEach(x => doResume(x.id)); else resumeAll(); break; }
+    case "stop":   { const s = selectedTasks().filter(x => x.status === "downloading" || x.status === "queued");
+                     if (s.length) s.forEach(x => doPause(x.id)); else stopAll(); break; }
+    case "stopall": stopAll(); break;
+    case "delete": { const s = selectedTasks(); if (s.length) deleteSelected(s); else toast("Select a download first"); break; }
+    case "deletecompleted": deleteCompleted(); break;
+    case "options": openOptions(); break;
+    case "exit": askConfirm("Exit D BOX? Active downloads will stop.", "Exit")
+                   .then(ok => { if (ok) api("POST","/api/quit").catch(()=>{}); }); break;
+    case "scheduler": openScheduler(); break;
+    case "later": setFilter("later"); break;
+    // Toolbar Download-Later button is a toggle: open the queue, click again to
+    // return to All Downloads (the sidebar row still just switches to the view).
+    case "togglelater": setFilter(filter === "later" ? "all" : "later"); break;
+    case "start": startLater(false); break;     // start selected held items
+    case "startall": startLater(true); break;   // start all (skipped excluded)
+    case "stopq": stopLater(); break;            // stop running queue items
+    case "skip": skipLater(); break;             // toggle skip on selected items
+    case "preview": previewWindows(); break;
+    case "uiset": case "appearance": openUI(); break;
+    case "about": showAbout(); break;
+    case "checkupdate": checkForUpdates(true); break;
+    case "togglecats": toggleSidebar(); break;
+    case "refresh": render(); break;
+    case "wsz": if (window.__wszToggle) window.__wszToggle(); break;
+  }
+}
+
+// ---- Download Later queue ------------------------------------------------
+// Held items the user starts manually. "Start" acts on the selection; "Start
+// All" runs every non-skipped item (up to the simultaneous-downloads limit set
+// in Options); "Skip" tags selected items so Start All passes over them.
+const laterTasks = () => tasks.filter(t => t.later && t.status !== "completed");
+const laterSelected = () => selectedTasks().filter(t => t.later && t.status !== "completed");
+function startLater(all) {
+  const pool = all ? laterTasks().filter(t => !t.skip) : laterSelected();
+  const startable = pool.filter(t => t.status === "paused" || t.status === "failed");
+  if (!startable.length) { toast(all ? "Nothing to start" : "Select a held download first"); return; }
+  startable.forEach(t => doResume(t.id));
+  toast(all ? `Starting ${startable.length} (max ${optState?.maxConcurrent || 1} at once)` : `Starting ${startable.length}`);
+}
+function stopLater() {
+  let pool = laterSelected().filter(t => t.status === "downloading" || t.status === "queued");
+  if (!pool.length) pool = laterTasks().filter(t => t.status === "downloading" || t.status === "queued");
+  if (!pool.length) { toast("Nothing is downloading in the queue"); return; }
+  pool.forEach(t => doPause(t.id));
+  toast(`Stopped ${pool.length}`);
+}
+async function skipLater() {
+  const sel = laterSelected();
+  if (!sel.length) { toast("Select a download to skip"); return; }
+  const makeSkip = !sel.every(t => t.skip); // all already skipped → un-skip; else skip
+  // Persist FIRST, then reflect locally — otherwise a poll fetching the old
+  // (not-yet-updated) state clobbers an optimistic change, so the toggle only
+  // appeared to take on the second click. The POST is a localhost round-trip (~ms).
+  try {
+    for (const t of sel) await api("POST", `/api/tasks/${t.id}/skip`, { skip: makeSkip });
+    sel.forEach(t => { t.skip = makeSkip; });
+    render(); // skip tag + line appear now; the next poll confirms the same value
+    toast(makeSkip ? `Will skip ${sel.length}` : `Un-skipped ${sel.length}`);
+  } catch (e) { toast(e.message); }
+}
+
+// ---- toolbar (context-sensitive on the Download Later view) ---------------
+const TOOLS_NORMAL = [
+  ["add","tb-add","Add URL"], ["grab","tb-grab","Grab Links"], ["resume","tb-resume","Resume"], ["stop","tb-stop","Stop"], ["stopall","tb-stopall","Stop All"], "sep",
+  ["delete","tb-delete","Delete"], ["deletecompleted","tb-deletecompleted","Delete Completed"], "sep",
+  ["options","tb-options","Options"], ["scheduler","tb-scheduler","Scheduler"], ["togglelater","tb-later","Download Later"],
+];
+const TOOLS_LATER = [
+  ["add","tb-add","Add URL"], ["grab","tb-grab","Grab Links"], ["start","tb-start","Start"], ["startall","tb-startall","Start All"], ["stopq","tb-stop","Stop"], ["skip","tb-skip","Skip"], "sep",
+  ["delete","tb-delete","Delete"], ["deletecompleted","tb-deletecompleted","Delete Completed"], "sep",
+  ["options","tb-options","Options"], ["scheduler","tb-scheduler","Scheduler"], ["togglelater","tb-later","Download Later"],
+];
+// Developer-mode extras (Options → Developer mode): window Preview + an Appearance shortcut.
+const TOOLS_DEV = ["sep", ["preview","tb-preview","Preview"], ["uiset","tb-ui","UI"]];
+const TOOL_TIPS = { add: "Add a download (focus the address bar)", grab: "Link Grabber — every link on a page or in pasted text",
+  delete: "Remove selected (Del)", togglelater: "Download Later queue", uiset: "Appearance", preview: "Preview the popup windows" };
+function renderToolbar() {
+  let tools = (filter === "later") ? TOOLS_LATER : TOOLS_NORMAL;
+  if (devMode()) tools = tools.concat(TOOLS_DEV);
+  // Highlight the Download-Later toggle while its view is active, so its
+  // pressed/return state is obvious.
+  $("#toolbar").innerHTML = tools.map(it => {
+    if (it === "sep") return `<div class="tbsep" role="separator"></div>`;
+    const on = it[0] === "togglelater" && filter === "later";
+    const tip = on ? "Back to All Downloads" : (TOOL_TIPS[it[0]] || it[2]);
+    return `<button type="button" class="tb${on ? " active" : ""}" data-act="${it[0]}" title="${esc(tip)}"${it[0] === "togglelater" ? ` aria-pressed="${on}"` : ""}>${I(it[1], 24)}<span class="tl">${esc(it[2])}</span></button>`;
+  }).join("");
+}
+renderToolbar();
+$("#toolbar").addEventListener("click", (e) => { const b = e.target.closest(".tb[data-act]"); if (b) doAct(b.dataset.act); });
+// Mouse clicks on chrome buttons don't take focus, so list shortcuts (Del,
+// Ctrl+A, Enter) keep working right after a click; Tab still reaches them.
+for (const sel of ["#toolbar", "#menubar", "#dropdown", "#ctxmenu"]) {
+  $(sel).addEventListener("mousedown", (e) => { if (e.target.closest("button")) e.preventDefault(); });
+}
+
+// ---- menu bar ------------------------------------------------------------
+const MENUS = [
+  ["Tasks", [["Add URL…","add","ui-plus"],["Grab links…","grab","ui-link"],["Save as…","saveas","ui-download"],"sep",
+    ["Resume selected","resume","ui-play"],["Stop selected","stop","ui-pause"],["Stop all","stopall","ui-stop"],"sep",
+    ["Delete completed","deletecompleted","ui-trash"]]],
+  ["File", [["Add URL…","add","ui-plus"],["Grab links…","grab","ui-link"],["Save as…","saveas","ui-download"],"sep",["Exit","exit","ui-close"]]],
+  ["Downloads", [["Resume","resume","ui-play"],["Stop","stop","ui-pause"],["Stop all","stopall","ui-stop"],"sep",
+    ["Remove from list","delete","ui-trash"],"sep",["Scheduler…","scheduler","ui-clock"],["Options…","options","ui-gear"]]],
+  ["View", [["Show / hide categories","togglecats","ui-list"],["Appearance…","uiset","ui-palette"],["Refresh","refresh","ui-refresh"],"sep",
+    ["Window size overlay","wsz","ui-info"]]],
+  ["Help", [["Check for updates…","checkupdate","ui-update"],"sep",["About D BOX","about","ui-info"]]],
+  ["Registration", [["D BOX is free — enjoy!","about","ui-check"]]],
+];
+$("#menubar").innerHTML = `<img class="applogo" src="/icons/appicon.png" alt="">` + MENUS.map((m, i) =>
+  `<button type="button" class="m" data-mi="${i}" aria-haspopup="menu"><u>${esc(m[0][0])}</u>${esc(m[0].slice(1))}</button>`).join("");
+const dd = $("#dropdown");
+let openMenu = -1;
+function closeMenu() { dd.style.display = "none"; openMenu = -1; document.querySelectorAll(".menubar .m").forEach(m => m.classList.remove("open")); }
+function openMenuAt(i) {
+  const items = MENUS[i][1];
+  dd._items = items;
+  dd.innerHTML = items.map((it, k) => it === "sep" ? `<div class="sep" role="separator"></div>`
+    : `<button type="button" class="di" data-k="${k}" role="menuitem"><span class="k">${I(it[2], 14)}</span>${esc(it[0])}</button>`).join("");
+  const el = document.querySelector(`.menubar .m[data-mi="${i}"]`);
+  const r = el.getBoundingClientRect();
+  dd.style.display = "block";
+  dd.style.left = Math.max(2, Math.min(r.left, innerWidth - dd.offsetWidth - 4)) + "px";
+  dd.style.top = r.bottom + 1 + "px";
+  document.querySelectorAll(".menubar .m").forEach(m => m.classList.toggle("open", +m.dataset.mi === i));
+  openMenu = i;
+}
+// Arrow keys walk a menu's items (dir 0 = first).
+function focusItem(menu, dir) {
+  const items = [...menu.querySelectorAll(".di")]; if (!items.length) return;
+  let i = items.indexOf(document.activeElement);
+  if (dir === 0) i = 0;
+  else if (i < 0) i = dir > 0 ? 0 : items.length - 1;
+  else i = (i + dir + items.length) % items.length;
+  items[i].focus();
+}
+function menuKeys(e, menu) {
+  if (e.key === "ArrowDown") { e.preventDefault(); focusItem(menu, 1); return true; }
+  if (e.key === "ArrowUp") { e.preventDefault(); focusItem(menu, -1); return true; }
+  if (e.key === "Home") { e.preventDefault(); focusItem(menu, 0); return true; }
+  return false;
+}
+$("#menubar").addEventListener("click", (e) => {
+  const m = e.target.closest(".m"); if (!m) return;
+  const i = +m.dataset.mi;
+  if (openMenu === i) closeMenu(); else { openMenuAt(i); if (e.detail === 0) focusItem(dd, 0); } // keyboard → first item
+});
+$("#menubar").addEventListener("keydown", (e) => {
+  const m = e.target.closest(".m"); if (!m) return;
+  if (e.key === "ArrowDown") { e.preventDefault(); openMenuAt(+m.dataset.mi); focusItem(dd, 0); }
+});
+$("#menubar").addEventListener("mouseover", (e) => {
+  if (openMenu < 0) return;
+  const m = e.target.closest(".m"); if (m && +m.dataset.mi !== openMenu) openMenuAt(+m.dataset.mi);
+});
+dd.addEventListener("click", (e) => {
+  const di = e.target.closest(".di"); if (!di || !dd._items) return;
+  const it = dd._items[+di.dataset.k]; closeMenu(); if (it) doAct(it[1]);
+});
+dd.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    e.preventDefault();
+    const n = MENUS.length; openMenuAt((openMenu + (e.key === "ArrowRight" ? 1 : -1) + n) % n); focusItem(dd, 0);
+  } else if (e.key === "Escape" || e.key === "Tab") {
+    const i = openMenu; closeMenu();
+    const b = document.querySelector(`.menubar .m[data-mi="${i}"]`); if (b) b.focus();
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); }
+  } else menuKeys(e, dd);
+});
+
+// ---- selection, header sort, context menu --------------------------------
+function applySelection() { document.querySelectorAll("#rows tr[data-id]").forEach(tr => tr.classList.toggle("selected", selectedIds.has(tr.dataset.id))); }
+// Shift-range from the anchor to toId over the visible (sorted) rows; additive
+// (ctrl+shift) merges the range into the current selection instead of replacing.
+function selectRange(toId, additive) {
+  const a = shownTasks.findIndex(t => t.id === anchorId);
+  const b = shownTasks.findIndex(t => t.id === toId);
+  if (a < 0 || b < 0) { selectedIds = new Set([toId]); anchorId = toId; return; }
+  const [lo, hi] = a <= b ? [a, b] : [b, a];
+  if (!additive) selectedIds = new Set();
+  for (let i = lo; i <= hi; i++) selectedIds.add(shownTasks[i].id);
+}
+$("#thead").addEventListener("click", (e) => {
+  const th = e.target.closest("th[data-sort]"); if (!th) return;
+  const key = th.dataset.sort;
+  if (SORT.key === key) SORT.dir *= -1;
+  else { SORT.key = key; SORT.dir = (key === "name" || key === "status" || key === "desc") ? 1 : -1; }
+  render();
+});
+// Windows-11-style selection: plain click = single; ctrl = toggle; shift = range
+// from anchor; ctrl+shift = add range.
+$("#rows").addEventListener("click", (e) => {
+  const tr = e.target.closest("tr[data-id]"); if (!tr) return;
+  const id = tr.dataset.id;
+  const ctrl = e.ctrlKey || e.metaKey, shift = e.shiftKey;
+  if (shift && anchorId != null) {
+    selectRange(id, ctrl);
+  } else if (ctrl) {
+    if (selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id);
+    anchorId = id; // ctrl-click moves the anchor
+  } else if (selectedIds.size === 1 && selectedIds.has(id)) {
+    selectedIds.clear(); anchorId = null; // clicking the already-selected row deselects it
+  } else {
+    selectedIds = new Set([id]); anchorId = id;
+  }
+  applySelection();
+});
+// Double-click: completed → open the file; anything else → live status window.
+$("#rows").addEventListener("dblclick", (e) => {
+  const tr = e.target.closest("tr[data-id]"); if (!tr) return;
+  const t = tasks.find(x => x.id === tr.dataset.id);
+  if (!t) return;
+  selectedIds = new Set([t.id]); anchorId = t.id; applySelection();
+  if (t.status === "completed") doOpen(t.id);
+  else doDetail(t.id);
+});
+// Click the empty area below the rows (or the header gap) to clear the selection
+// — an easy, discoverable way to deselect everything.
+$(".tablewrap").addEventListener("click", (e) => {
+  if (e.target.closest("tr[data-id]") || e.target.closest("thead")) return; // rows/header handled above
+  if (selectedIds.size) { selectedIds.clear(); anchorId = null; applySelection(); }
+});
+// ---- in-page dialog host (New Download / status) -------------------------
+// Single-window mode (Wails / browser): load the dialog pages into an iframe
+// modal instead of opening separate OS windows. Sizes are capped to the window.
+function openDialog(src, w, h) {
+  const f = $("#dlgFrame");
+  if (w) f.style.width = `min(${w}px, calc(100vw - 16px))`;
+  if (h) f.style.height = `min(${h}px, calc(100vh - 16px))`;
+  f.src = src;
+  $("#dlgModal").classList.add("show");
+}
+function closeDialog() {
+  $("#dlgModal").classList.remove("show");
+  $("#dlgFrame").src = "about:blank";
+  $("#dlgFrame").style.width = ""; $("#dlgFrame").style.height = "";
+}
+// Called by the dialog pages (add/detail) when they finish, since window.close()
+// can't close an iframe. Polling refreshes the list shortly after.
+window.myidmDialogClosed = closeDialog;
+// Called by add.html after Start: swap the dialog to the live progress view.
+window.myidmShowStatus = (id) => openDialog("/detail?id=" + id, 600, 470);
+$("#dlgModal").addEventListener("click", (e) => { if (e.target === $("#dlgModal")) closeDialog(); });
+
+// Double-clicking an in-progress download opens the per-connection status view.
+window.doDetail = (id) => {
+  if (serverGUI) {
+    api("POST", "/api/detail", { id }).then(r => { if (!r || !r.native) openDialog("/detail?id=" + id, 600, 470); })
+      .catch(() => openDialog("/detail?id=" + id, 600, 470));
+  } else {
+    openDialog("/detail?id=" + id, 600, 470);
+  }
+};
+
+const ctx = $("#ctxmenu");
+function hideCtx() { ctx.style.display = "none"; ctx._items = null; }
+function ctxItems(t) {
+  const items = [];
+  if (t.status === "downloading" || t.status === "queued") {
+    items.push({ k:"ui-status", label:"Show download status", fn:() => doDetail(t.id) });
+    items.push({ k:"ui-pause", label:"Pause", fn:() => doPause(t.id) });
+    items.push({ k:"ui-close", label:"Cancel", fn:() => doDelete(t.id, true), danger:true });
+  } else if (t.status === "paused") {
+    items.push({ k:"ui-play", label:"Resume", fn:() => doResume(t.id) });
+    items.push({ k:"ui-close", label:"Remove", fn:() => doDelete(t.id, true), danger:true });
+  } else if (t.status === "failed") {
+    items.push({ k:"ui-retry", label:"Retry", fn:() => doResume(t.id) });
+    items.push({ k:"ui-close", label:"Remove", fn:() => doDelete(t.id, true), danger:true });
+  } else if (t.status === "completed") {
+    // Open file / folder are always offered — the server is the source of truth on
+    // whether the file is really there (fileExists can lag), so a stale flag never
+    // hides the action the user most wants.
+    items.push({ k:"ui-open", label:"Open file", fn:() => doOpen(t.id) });
+    items.push({ k:"ui-folder", label:"Open with / show in folder", fn:() => doReveal(t.id) });
+    if (t.fileExists) {
+      items.push({ k:"ui-rename", label:"Rename…", fn:() => doRename(t.id) });
+      items.push({ k:"ui-move", label:"Move to…", fn:() => doMove(t.id) });
+    }
+    items.push({ sep:true });
+    items.push({ k:"ui-trash", label:"Remove from list", fn:() => doDelete(t.id, false), danger:true });
+    if (t.fileExists) items.push({ k:"ui-trash", label:"Delete + file", fn:() => doDelete(t.id, true, true), danger:true });
+  }
+  items.push({ sep:true });
+  items.push({ k:"ui-copy", label:"Copy address", fn:() => copyText(t.url) });
+  return items;
+}
+function openCtx(x, y, t) {
+  const items = ctxItems(t); ctx._items = items;
+  ctx.innerHTML = items.map((it, i) => it.sep ? `<div class="sep" role="separator"></div>`
+    : `<button type="button" class="di${it.danger ? " danger" : ""}" data-k="${i}" role="menuitem"><span class="k">${it.k ? I(it.k, 14) : ""}</span>${esc(it.label)}</button>`).join("");
+  ctx.style.display = "block";
+  const w = ctx.offsetWidth, h = ctx.offsetHeight;
+  ctx.style.left = Math.max(2, Math.min(x, innerWidth - w - 6)) + "px";
+  ctx.style.top = Math.max(2, Math.min(y, innerHeight - h - 6)) + "px";
+}
+$("#rows").addEventListener("contextmenu", (e) => {
+  const tr = e.target.closest("tr[data-id]"); if (!tr) return;
+  e.preventDefault();
+  const id = tr.dataset.id;
+  // Right-clicking an item outside the selection selects just it; right-clicking
+  // one already selected keeps the multi-selection (Windows behavior).
+  if (!selectedIds.has(id)) { selectedIds = new Set([id]); anchorId = id; applySelection(); }
+  const t = tasks.find(x => x.id === id); if (t) openCtx(e.clientX, e.clientY, t);
+});
+ctx.addEventListener("click", (e) => {
+  const di = e.target.closest(".di"); if (!di || !ctx._items) return;
+  const it = ctx._items[+di.dataset.k]; hideCtx(); if (it && it.fn) it.fn();
+});
+ctx.addEventListener("keydown", (e) => { menuKeys(e, ctx); });
+
+// ---- sidebar interactions ------------------------------------------------
+$("#sidebar").addEventListener("click", (e) => {
+  if (e.target.closest("[data-toggle]")) { allExpanded = !allExpanded; renderSidebar(); return; }
+  const row = e.target.closest(".trow"); if (!row) return;
+  setFilter(row.dataset.f);
+});
+$("#sidebar").addEventListener("keydown", (e) => {
+  const row = e.target.closest(".trow"); if (!row) return;
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setFilter(row.dataset.f); }
+  else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && row.dataset.f === "all") {
+    e.preventDefault(); allExpanded = e.key === "ArrowRight"; renderSidebar();
+  } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const rows = [...document.querySelectorAll("#sidebar .trow")].filter(r => r.offsetParent);
+    const i = rows.indexOf(row) + (e.key === "ArrowDown" ? 1 : -1);
+    if (rows[i]) rows[i].focus();
+  }
+});
+$("#catClose").addEventListener("click", toggleSidebar);
+$("#catOpen").addEventListener("click", toggleSidebar);
+
+// global dismissers
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#ctxmenu")) hideCtx();
+  if (!e.target.closest(".menubar") && !e.target.closest("#dropdown")) closeMenu();
+});
+document.addEventListener("scroll", () => { hideCtx(); closeMenu(); }, true);
+window.addEventListener("resize", () => { hideCtx(); closeMenu(); });
+
+// ---- add / save as -------------------------------------------------------
+// Add: a YouTube playlist gets the playlist picker; anything else goes to the
+// Link Grabber (/ui/grabber.js), which probes the address — a direct file or
+// stream opens the classic New Download dialog, a web page opens the grabber
+// with everything found on it. Save as… always opens the classic dialog.
+function clearUrlIf(u) { const inp = $("#urlInput"); if (inp.value.trim() === u) inp.value = ""; }
+// The IDM-style "New Download" dialog (save location by file type, Browse,
+// Start / Cancel). With native windows (serverGUI) the server pops one;
+// otherwise (Wails single-window / browser) it's an in-page iframe modal.
+async function openClassicDialog(u) {
+  u = String(u || "").trim();
+  if (!u) { toast("Paste a URL first"); return; }
+  if (serverGUI) {
+    try { const r = await api("POST", "/api/prompt", { url: u }); if (r && r.native) { clearUrlIf(u); return; } } catch {}
+  }
+  openDialog("/add?url=" + encodeURIComponent(u) + "&dialog=1");
+  clearUrlIf(u);
+}
+let addBusy = false;
+function setAddBusy(b) {
+  addBusy = !!b;
+  const btn = $("#addBtn");
+  btn.disabled = addBusy; $("#saveAsBtn").disabled = addBusy;
+  btn.querySelector(".bic").innerHTML = addBusy ? `<span class="spinner"></span>` : I("ui-plus", 14);
+  btn.title = addBusy ? "Checking the address…" : "Add this link";
+}
+async function addUrlFlow(u, skipPlaylist) {
+  u = (u || "").trim();
+  if (!u) { toast("Paste a URL first"); return; }
+  // A YouTube playlist URL? Offer to grab the whole thing before the normal dialog.
+  if (!skipPlaylist && /[?&]list=/.test(u) && /(youtube\.com|youtu\.be)/i.test(u)) {
+    toast("Checking playlist…");
+    try {
+      const info = await api("GET", "/api/playlist?url=" + encodeURIComponent(u));
+      if (info && info.isPlaylist && info.count > 1) { openPlaylistModal(u, info); return; }
+    } catch {}
+  }
+  if (!window.DBGrab) { openClassicDialog(u); return; }
+  if (addBusy) return;
+  try { await DBGrab.fromUrl(u, { onDirect: openClassicDialog, onBusy: setAddBusy }); }
+  catch (_) { setAddBusy(false); openClassicDialog(u); return; }
+  clearUrlIf(u);
+}
+$("#saveAsBtn").addEventListener("click", () => openClassicDialog($("#urlInput").value));
+$("#addForm").addEventListener("submit", (ev) => { ev.preventDefault(); addUrlFlow($("#urlInput").value); });
+// Pasting several links at once into the URL bar opens the Link Grabber with
+// them instead of jamming them into one field. Copied links often carry only
+// their labels in the text flavour — the real hrefs ride in text/html — so
+// both flavours are scanned and the richer one wins.
+function linksIn(text) {
+  const seen = new Set(), out = [];
+  const push = (u) => {
+    u = u.replace(/&amp;/gi, "&").replace(/[.,;:!?'")\]]+$/, "");
+    if (/^https?:\/\//i.test(u) && !seen.has(u)) { seen.add(u); out.push(u); }
+  };
+  const s = text || "";
+  for (const m of s.matchAll(/href\s*=\s*["']([^"']+)["']/gi)) push(m[1]);
+  for (const u of s.match(/https?:\/\/[^\s<>"']+/g) || []) push(u);
+  return out;
+}
+function pastedLinks(dt) {
+  if (!dt) return [];
+  const a = linksIn(dt.getData("text/html")), b = linksIn(dt.getData("text"));
+  return a.length > b.length ? a : b;
+}
+$("#urlInput").addEventListener("paste", (e) => {
+  const links = pastedLinks(e.clipboardData || window.clipboardData);
+  if (links.length < 2) return;
+  e.preventDefault();
+  if (window.DBGrab) DBGrab.openText(links.join("\n"));
+  else toast(`${links.length} links pasted — the Link Grabber didn't load`);
+});
+
+// ---- YouTube playlist ----------------------------------------------------
+// The server enumerates the playlist's videos (deduped); we show every one with
+// a checkbox (all checked) so the user picks exactly what to download.
+let plURL = "", plEntries = [], plIsMix = false;
+function plCountText() {
+  const sel = plEntries.filter(e => e.selected).length;
+  const base = `${plEntries.length} video${plEntries.length === 1 ? "" : "s"} — ${sel} selected (best quality)`;
+  return plIsMix ? base + " · YouTube Mix (endless radio — showing the first videos)" : base;
+}
+function renderPlList() {
+  $("#plList").innerHTML = plEntries.length ? plEntries.map((e, i) => `
+    <label class="grabrow">
+      <input type="checkbox" ${e.selected ? "checked" : ""} data-pi="${i}">
+      <span class="gi">${i + 1}</span>
+      <span class="gt" title="${esc(e.title)}">${esc(e.title)}</span>
+    </label>`).join("")
+    : `<div class="none">No videos found.</div>`;
+  $("#plCount").textContent = plCountText();
+}
+function openPlaylistModal(u, info) {
+  const t = $("#toast"); t.classList.remove("show"); clearTimeout(t._h); // drop the stale "Checking playlist…"
+  plURL = u;
+  plIsMix = !!info.mix;
+  plEntries = (info.entries || []).map(e => ({ url: e.url, title: e.title || "video", selected: true }));
+  $("#plTitle").textContent = info.title || "Playlist";
+  $("#plTitle").title = info.title || "";
+  $("#plAudio").checked = false; $("#plLater").checked = false;
+  $("#plOne").hidden = !/[?&]v=/.test(u); // only offer "just this" for a watch URL
+  renderPlList();
+  $("#plModal").classList.add("show");
+}
+function closePl() { $("#plModal").classList.remove("show"); }
+$("#plList").addEventListener("change", (e) => {
+  const cb = e.target.closest("[data-pi]"); if (!cb) return;
+  const i = +cb.dataset.pi; if (plEntries[i]) plEntries[i].selected = cb.checked;
+  $("#plCount").textContent = plCountText();
+});
+$("#plSelAll").addEventListener("click", (e) => { e.preventDefault(); plEntries.forEach(x => x.selected = true); renderPlList(); });
+$("#plSelNone").addEventListener("click", (e) => { e.preventDefault(); plEntries.forEach(x => x.selected = false); renderPlList(); });
+$("#plGo").addEventListener("click", async () => {
+  const sel = plEntries.filter(e => e.selected);
+  if (!sel.length) { toast("Select at least one video"); return; }
+  const audio = $("#plAudio").checked, later = $("#plLater").checked;
+  closePl(); $("#urlInput").value = ""; toast(`Adding ${sel.length} video${sel.length === 1 ? "" : "s"}…`);
+  try {
+    const r = await api("POST", "/api/playlist", { url: plURL, audio, later, entries: sel.map(e => ({ url: e.url, title: e.title })) });
+    toast(`Added ${r.count} video${r.count === 1 ? "" : "s"}${later ? " to Download Later" : ""}`);
+  } catch (e) { toast(e.message); }
+});
+$("#plOne").addEventListener("click", () => {
+  const single = plURL.replace(/([?&])list=[^&]*(&|$)/, "$1").replace(/[?&]$/, ""); // drop the list= param
+  closePl(); addUrlFlow(single, true);
+});
+$("#plCancel").addEventListener("click", closePl);
+$("#plModal").addEventListener("click", (e) => { if (e.target === $("#plModal")) closePl(); });
+
+// ---- preview: pop all three secondary windows at once --------------------
+// Eyeball the New Download dialog + Download status + Download complete windows
+// together. The status and completion windows are opened for the SAME task id,
+// so the "close one closes both" pairing can be exercised from here too. Prefers
+// a completed task (its data fills both windows nicely), else the newest one.
+async function previewWindows() {
+  const sampleURL = $("#urlInput").value.trim() || "https://example.com/dbox-sample-video.mp4";
+  const t = tasks.find(x => x.status === "completed") || tasks[0];
+  if (serverGUI) { // native app: each is a real floating window
+    try { await api("POST", "/api/prompt", { url: sampleURL }); } catch {}
+    if (t) {
+      try { await api("POST", "/api/detail", { id: t.id }); } catch {}
+      try { await api("POST", "/api/done",   { id: t.id }); } catch {}
+    } else {
+      toast("Add a download first — the status & complete windows need a task");
+    }
+  } else { // single-window / browser: New Download shows inline
+    openDialog("/add?url=" + encodeURIComponent(sampleURL) + "&dialog=1");
+    toast("Single-window mode: status & complete appear inline during downloads");
+  }
+}
+
+// ---- "Download complete" popup -------------------------------------------
+const SUPPRESS_KEY = "myidm.donePopupSuppressUntil";
+let seenStatus = null, doneQueue = [], doneCurrent = null;
+const popupSuppressed = () => Date.now() < (+lsGet(SUPPRESS_KEY, "0") || 0);
+function detectCompletions(list) {
+  if (seenStatus === null) { seenStatus = {}; for (const t of list) seenStatus[t.id] = t.status; return; }
+  // In the native app, the engine pops a separate top-level "done" window, so
+  // the in-app modal stays off to avoid a double popup.
+  const suppressed = popupSuppressed() || serverGUI;
+  for (const t of list) {
+    const prev = seenStatus[t.id];
+    if (!suppressed && t.status === "completed" && prev !== "completed"
+        && !doneQueue.some(q => q.id === t.id) && !(doneCurrent && doneCurrent.id === t.id)) doneQueue.push(t);
+  }
+  const next = {}; for (const t of list) next[t.id] = t.status; seenStatus = next;
+  showNextDone();
+}
+function showNextDone() {
+  if (doneCurrent || !doneQueue.length) return;
+  if (popupSuppressed()) { doneQueue = []; return; }
+  doneCurrent = doneQueue.shift(); const t = doneCurrent;
+  $("#dmIcon").innerHTML = fileIcon(t.fileName || "", 32);
+  $("#dmName").textContent = t.fileName || "download";
+  $("#dmName").title = t.fileName || "";
+  $("#dmMeta").textContent = [t.size > 0 ? humanBytes(t.size) : "", t.filePath || ""].filter(Boolean).join("  ·  ");
+  $("#dmMore").textContent = doneQueue.length ? `+${doneQueue.length} more` : "";
+  $("#dmSuppress").checked = false;
+  const canOpen = t.fileExists !== false; $("#dmOpen").disabled = !canOpen; $("#dmFolder").disabled = !canOpen;
+  $("#doneModal").classList.add("show");
+}
+function closeDone() {
+  if ($("#dmSuppress").checked) { lsSet(SUPPRESS_KEY, String(Date.now() + 2*3600*1000)); doneQueue = []; }
+  $("#doneModal").classList.remove("show"); doneCurrent = null; setTimeout(showNextDone, 180);
+}
+$("#dmClose").addEventListener("click", closeDone);
+$("#dmOpen").addEventListener("click", () => { if (doneCurrent) doOpen(doneCurrent.id); closeDone(); });
+$("#dmFolder").addEventListener("click", () => { if (doneCurrent) doReveal(doneCurrent.id); closeDone(); });
+$("#doneModal").addEventListener("click", (e) => { if (e.target === $("#doneModal")) closeDone(); });
+// Every modal, paired with its close function — ONE list drives both the Escape
+// handler and the list-shortcut guard, so a new modal can't be forgotten in one
+// of them. Ordered topmost-first: confirm stacks over everything, Appearance
+// over Options (it opens from there).
+const MODALS = [
+  ["confirmModal", () => closeConfirm(false)], ["uiModal", closeUI],
+  ["doneModal", closeDone], ["aboutModal", () => $("#aboutModal").classList.remove("show")],
+  ["optionsModal", closeOptions], ["schedModal", closeScheduler], ["renameModal", closeRename],
+  ["plModal", closePl], ["updModal", closeUpd], ["dlgModal", closeDialog],
+];
+// The Link Grabber (its own modal, /ui/grabber.js) handles its own Escape.
+const anyModalOpen = () => MODALS.some(([m]) => $("#" + m).classList.contains("show")) || !!(window.DBGrab && DBGrab.isOpen());
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  // Did Escape have a menu/modal/popup to dismiss? If so, don't also clear the selection.
+  const dismissable = ctx.style.display === "block" || openMenu >= 0 || anyModalOpen();
+  hideCtx(); closeMenu();
+  // Close only the TOPMOST open modal (confirm stacks over Options/Scheduler) —
+  // one Escape per layer, like native dialogs.
+  for (const [m, close] of MODALS) if ($("#" + m).classList.contains("show")) { close(); break; }
+  // Plain Escape (nothing to dismiss) clears the row selection — the easy deselect.
+  if (!dismissable && selectedIds.size) { selectedIds.clear(); anchorId = null; applySelection(); }
+});
+// List keyboard: Ctrl+A select all, Delete remove selected, Enter open/show.
+// Ignored while typing in a field, on a button, or with any modal open.
+document.addEventListener("keydown", (e) => {
+  if (/^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(e.target.tagName)) return;
+  if (e.target.closest && e.target.closest("#sidebar")) { if (e.key === "Enter" || e.key === " ") return; }
+  if (anyModalOpen()) return;
+  if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
+    e.preventDefault();
+    selectedIds = new Set(shownTasks.map(t => t.id));
+    anchorId = shownTasks.length ? shownTasks[0].id : null;
+    applySelection();
+  } else if (e.key === "Delete") {
+    const s = selectedTasks(); if (s.length) deleteSelected(s);
+  } else if (e.key === "Enter") {
+    const t = selectedTask(); if (t) { if (t.status === "completed") doOpen(t.id); else doDetail(t.id); }
+  }
+});
+
+// Live updates via polling rather than SSE: Wails' asset server buffers
+// responses so EventSource can't stream through it. Polling (request/response)
+// works for Wails, the raw WebView2 window and the browser alike. We only
+// re-render when the task data actually changed, so it never disrupts hovering,
+// selection or an open context menu.
+let pollSig = "";
+// A queued prompt (from the browser extension or a popup): grab=1 → open the
+// Link Grabber on that page; anything else → the New Download dialog.
+function handlePrompt(qs) {
+  let q = null; try { q = new URLSearchParams(qs); } catch (_) {}
+  if (q && q.get("grab") === "1" && q.get("url")) {
+    const ctxTok = q.get("ctx") || "", title = q.get("title") || "", referer = q.get("referer") || "";
+    const direct = (u) => openDialog("/add?url=" + encodeURIComponent(u) + "&dialog=1" + (ctxTok ? "&ctx=" + encodeURIComponent(ctxTok) : ""));
+    if (window.DBGrab) {
+      Promise.resolve(DBGrab.fromUrl(q.get("url"), { ctx: ctxTok, title, referer, onDirect: direct })).catch(() => direct(q.get("url")));
+    } else direct(q.get("url"));
+    return;
+  }
+  openDialog("/add?" + qs);
+}
+async function poll() {
+  try {
+    const d = await api("GET", "/api/tasks");
+    const list = d.tasks || [];
+    tasks = list;
+    detectCompletions(list);
+    // The change-signature must cover every field a row RENDERS, or edits that
+    // only touch that field (rename, re-schedule, move, external file delete)
+    // never repaint: fileName, scheduledAt, dir, fileExists, later, description.
+    const sig = list.map(t => t.id + ":" + t.status + ":" + t.size + ":" + t.downloaded + ":" + ((t.speed||0)|0)
+      + ":" + (t.skip?1:0) + (t.later?1:0) + (t.fileExists?1:0) + ":" + (t.fileName||"") + ":" + (t.scheduledAt||"")
+      + ":" + (t.dir||"") + ":" + (t.description||"") + ":" + (t.note||"") + ":" + (t.sizeEstimated?1:0) + (t.live?1:0)
+      + ":" + (t.fileVersion||"") + ":" + (t.error||"")).join("|");
+    if (sig !== pollSig) { pollSig = sig; render(); }
+  } catch {}
+  // New Download / Link Grabber prompts relayed from the browser extension or a popup.
+  try {
+    const p = await api("GET", "/api/prompts");
+    if (p && p.prompts) for (const qs of p.prompts) handlePrompt(qs);
+  } catch {}
+}
+function connect() { poll(); setInterval(poll, 350); }
+loadCategories().then(connect); // categories first, so the first table render has them
+loadOptions(); // preload settings (download folder, max-concurrent) up front
+
+// Show the running version in About, and check for a newer build once at
+// startup (silent — only pops the modal if an update is actually available).
+// Guarded so a reopened window (same session) doesn't nag repeatedly.
+(async () => {
+  try {
+    const r = await api("GET", "/api/update/check");
+    if (r && r.current) $("#abVersion").textContent = "v" + r.current;
+    let seen = false; try { seen = !!sessionStorage.getItem("dbox.upd.seen"); } catch (_) {}
+    if (r && r.available && !seen) {
+      try { sessionStorage.setItem("dbox.upd.seen", "1"); } catch (_) {}
+      checkForUpdates(false);
+    }
+  } catch (_) {}
+})();
+</script>
+<script>
+/* Reveal the native window only after the first paint — the gui layer parks it
+   off-screen until myidmReady() fires, eliminating the WebView2 white/black
+   cold-start flash. */
+(function () {
+  function ready() { try { window.myidmReady && window.myidmReady(); } catch (e) {} }
+  function arm() { requestAnimationFrame(function () { requestAnimationFrame(ready); }); }
+  if (document.readyState === 'loading') addEventListener('DOMContentLoaded', arm);
+  else arm();
+})();
+</script>
+<div id="wsz"><span id="wsz-t"></span><span id="wsz-x" title="Hide — Ctrl+Alt+W to toggle"></span></div>
+<style>
+#wsz{position:fixed;right:7px;bottom:28px;z-index:2147483647;display:flex;align-items:center;gap:9px;background:var(--toast-bg);color:var(--toast-text);font:600 11px/1.25 "Segoe UI",Tahoma,sans-serif;padding:3px 8px;border:1px solid var(--accent);border-radius:5px;box-shadow:var(--shadow-md);pointer-events:none;white-space:nowrap;letter-spacing:.2px;}
+#wsz-x{pointer-events:auto;cursor:pointer;opacity:.6;line-height:0;}
+#wsz-x:hover{opacity:1;}
+</style>
+<script>
+(function(){var N=1,K="dbox.wsz.show";
+var b=document.getElementById("wsz"),t=document.getElementById("wsz-t"),x=document.getElementById("wsz-x");
+x.innerHTML=window.DBI?window.DBI.icon("ui-close",10):"x";
+function shown(){try{return localStorage.getItem(K)==="1";}catch(e){return false;}}
+function apply(){b.style.display=shown()?"":"none";}
+function dpr(){return Math.round((window.devicePixelRatio||1)*100)/100;}
+function upd(){t.textContent="#"+N+"  "+window.innerWidth+" × "+window.innerHeight+"  · ×"+dpr();}
+function toggle(){try{localStorage.setItem(K,shown()?"0":"1");}catch(e){}apply();}
+x.addEventListener("click",toggle);
+window.addEventListener("resize",upd);
+window.addEventListener("keydown",function(e){if(e.ctrlKey&&e.altKey&&(e.key==="w"||e.key==="W")){e.preventDefault();toggle();}});
+upd();apply();window.__wszToggle=toggle;
+})();
+</script>
+</body>
+</html>

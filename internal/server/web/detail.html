@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script>
+/* Theme, applied pre-paint. The server stamps <html data-theme="…"> with the
+   saved theme (the popups run in their own WebView2 profile, so localStorage
+   from the main window never reaches them); only without that attribute fall
+   back to the local cache. "graphite"/"slate" are the default: no attribute. */
+(function () {
+  try {
+    var h = document.documentElement;
+    if (h.hasAttribute("data-theme")) return;
+    var t = localStorage.getItem("dbox.ui.theme");
+    if (t && t !== "graphite" && t !== "slate") h.setAttribute("data-theme", t);
+  } catch (e) {}
+})();
+</script>
+<link rel="stylesheet" href="/ui/theme.css">
+<script src="/ui/icons.js"></script>
+<title>Download status — D BOX</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body { background: var(--bg); color: var(--text); font: 11.5px/1.4 "Segoe UI", Tahoma, sans-serif;
+    display: flex; flex-direction: column; padding: 10px 11px; gap: 8px; -webkit-user-select: none; user-select: none; }
+
+  /* header: file icon (+ status mark) · name · address */
+  .hdr { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .ficon { position: relative; flex: none; width: 32px; height: 32px; }
+  .ficon .st { position: absolute; right: -5px; bottom: -4px; line-height: 0; border-radius: 50%;
+    box-shadow: 0 0 0 2px var(--bg); background: var(--bg); }
+  .hdr .who { min-width: 0; flex: 1; }
+  .fname { font-size: 12.5px; font-weight: 600; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .url { color: var(--accent); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+
+  .card { background: var(--bg2); border: 1px solid var(--border-soft); border-radius: var(--radius-lg);
+    padding: 9px 11px 10px; box-shadow: var(--shadow-sm); }
+  .info { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr); gap: 3px 10px; }
+  .info .k { color: var(--muted); white-space: nowrap; }
+  .info .v { font-variant-numeric: tabular-nums; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .info .v.wide { grid-column: 2 / -1; }
+  .v.st-downloading { color: var(--green); }
+  .v.st-failed { color: var(--red); }
+  .v.st-paused, .v.st-queued { color: var(--text-dim); }
+  .v.st-completed { color: var(--green); }
+
+  .pbar { position: relative; height: 20px; border-radius: 7px; background: var(--prog-track);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.28); overflow: hidden; margin-top: 9px; }
+  /* The fill: the theme's progress gradient plus a translucent highlight band that
+     flows left→right on a loop, so the bar looks like liquid moving inside even
+     when full (100%). Loop endpoints: with a 40%-wide band, background-position-x P
+     maps to offset P×(100%−40%), so the band is fully off-canvas only at P ≤ −67%
+     and P ≥ 167% — the old −45%…150% left a visible sliver teleporting at each
+     loop boundary. */
+  .pbar > div { height: 100%; width: 0; border-radius: 7px; transition: width .3s;
+    background-image:
+      linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.30) 50%, rgba(255,255,255,0) 100%),
+      linear-gradient(180deg, var(--prog-a), var(--prog-b));
+    background-repeat: no-repeat, no-repeat;
+    background-size: 40% 100%, 100% 100%;
+    background-position: -70% 0, 0 0; }
+  /* Liquid flows only while data is actually flowing; a paused/failed/complete
+     bar sits still instead of implying activity. */
+  .pbar > div.live { animation: liquid 1.5s linear infinite; }
+  .pbar > div.stale { filter: saturate(.35) brightness(.85); } /* paused: dimmed */
+  .pbar > div.bad { background-image: linear-gradient(180deg, var(--red), #b44a47); } /* failed */
+  @keyframes liquid { from { background-position: -70% 0, 0 0; } to { background-position: 170% 0, 0 0; } }
+  @media (prefers-reduced-motion: reduce) { .pbar > div.live { animation: none; } }
+  .pbar .pct { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 10.5px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.7);
+    font-variant-numeric: tabular-nums; pointer-events: none; }
+  .errline { display: none; align-items: flex-start; gap: 6px; margin-top: 7px; color: var(--red); font-size: 11px; }
+  .errline.show { display: flex; }
+  .errline .dbi { margin-top: 1px; }
+  .errline span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    -webkit-user-select: text; user-select: text; }
+
+  .actions { display: flex; gap: 7px; justify-content: flex-end; }
+  .actions .btn { padding: 5px 12px; }
+  #cancel:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
+
+  .connhead { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
+  .connhead b { color: var(--text-dim); font-weight: 600; }
+  .segbar { flex: 1; position: relative; height: 10px; border-radius: 5px; background: var(--prog-track);
+    overflow: hidden; }
+  .segbar .seg { position: absolute; top: 0; bottom: 0; border-right: 1px solid var(--bg); }
+  .segbar .seg .fill { height: 100%; background: linear-gradient(180deg, var(--prog-a), var(--prog-b)); }
+
+  /* app-styled confirm (replaces the browser's "127.0.0.1 says" dialog) */
+  #cfWrap { position: fixed; inset: 0; background: var(--backdrop); display: none;
+    align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(2px); }
+  #cfWrap.show { display: flex; }
+  .cfbox { width: 300px; max-width: 90vw; background: var(--bg2); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); overflow: hidden;
+    animation: cfpop .14s ease-out; }
+  @keyframes cfpop { from { transform: scale(.96); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .cfbox .cfbody { display: flex; align-items: center; gap: 11px; padding: 15px 15px 13px; }
+  .cfbox .cfmsg { font-size: 12px; line-height: 1.5; }
+  .cfbox .cfa { display: flex; gap: 7px; padding: 0 15px 14px; }
+  .cfbox .cfa .btn { flex: 1; }
+
+  .conns { flex: 1; min-height: 44px; overflow: auto; background: var(--panel); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); }
+  table.ct { width: 100%; border-collapse: collapse; font-size: 11px; }
+  table.ct th { position: sticky; top: 0; z-index: 1; background: linear-gradient(var(--grad-a), var(--grad-b)); color: var(--text-dim);
+    text-align: left; font-weight: 600; padding: 4px 9px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.ct td { padding: 3px 9px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  table.ct tbody tr:hover td { background: var(--hover); }
+  table.ct td.n, table.ct th.n { width: 34px; color: var(--muted); text-align: right; }
+  table.ct td.dl { width: 88px; }
+  table.ct td.pg { width: 30%; }
+  .mini { height: 5px; border-radius: 3px; background: var(--prog-track); overflow: hidden; }
+  .mini > i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--prog-b), var(--prog-a)); }
+  .mini.idle > i { background: var(--muted); }
+  .mini.err > i { background: var(--red); }
+  td.inf { overflow: hidden; text-overflow: ellipsis; max-width: 0; }
+  .info-recv { color: var(--green); }
+  .info-idle { color: var(--muted); }
+  .info-err { color: var(--red); }
+</style>
+</head>
+<body>
+  <div class="hdr">
+    <div class="ficon"><span id="ficon"></span><span class="st" id="stIcon"></span></div>
+    <div class="who">
+      <div class="fname" id="fname">Download status</div>
+      <div class="url" id="url"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="info">
+      <span class="k">Status</span><span class="v" id="status">…</span>
+      <span class="k">Resume</span><span class="v" id="resume"></span>
+      <span class="k">File size</span><span class="v" id="size"></span>
+      <span class="k">Downloaded</span><span class="v" id="downloaded"></span>
+      <span class="k">Transfer rate</span><span class="v" id="rate"></span>
+      <span class="k">Time left</span><span class="v" id="eta"></span>
+      <span class="k">Avg / Max / Min</span><span class="v wide" id="rateStats"></span>
+    </div>
+    <div class="pbar"><div id="pbar"></div><span class="pct" id="pct">0%</span></div>
+    <div class="errline" id="errline"><span id="errIc"></span><span id="errText"></span></div>
+  </div>
+
+  <div class="actions">
+    <button class="btn" id="pause">Pause</button>
+    <button class="btn" id="resumeBtn">Resume</button>
+    <button class="btn" id="cancel">Cancel</button>
+    <button class="btn" id="close">Close</button>
+  </div>
+
+  <div class="connhead"><span><b>Connections</b> <span id="nconn"></span></span><div class="segbar" id="segbar" title="Start positions and download progress by connections"></div></div>
+
+  <div class="conns">
+    <table class="ct">
+      <thead><tr><th class="n">N.</th><th class="dl">Downloaded</th><th class="pg">Progress</th><th>Info</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <div id="cfWrap">
+    <div class="cfbox">
+      <div class="cfbody"><span id="cfIc"></span><div class="cfmsg">Cancel and delete this download?</div></div>
+      <div class="cfa"><button id="cfYes" class="btn danger">Delete</button><button id="cfNo" class="btn">Keep</button></div>
+    </div>
+  </div>
+
+<script>
+const id = new URLSearchParams(location.search).get("id") || "";
+const $ = (s) => document.getElementById(s);
+const openedAt = Date.now();
+let timer = null, closeTimer = null;
+function humanBytes(n){ if(n==null||n<0)return "0 B"; const u=["B","KB","MB","GB","TB"];let i=0;
+  while(n>=1024&&i<u.length-1){n/=1024;i++;} return n.toFixed(i?(n>=100?1:2):0)+" "+u[i]; }
+function humanETA(s){ if(s==null||s<0||!isFinite(s))return "—"; s=Math.round(s);
+  if(s<60)return s+" sec"; if(s<3600)return Math.floor(s/60)+" min "+(s%60)+" sec";
+  return Math.floor(s/3600)+" hr "+Math.floor((s%3600)/60)+" min"; }
+function api(method, path, body){ return fetch(path,{ method,
+  headers: body?{"Content-Type":"application/json"}:undefined, body: body?JSON.stringify(body):undefined }); }
+// Icons (the sprite from /ui/icons.js is in the page already).
+$("pause").insertAdjacentHTML("afterbegin", DBI.icon("ui-pause", 13));
+$("resumeBtn").insertAdjacentHTML("afterbegin", DBI.icon("ui-play", 13));
+$("cancel").insertAdjacentHTML("afterbegin", DBI.icon("ui-close", 13));
+$("errIc").innerHTML = DBI.icon("ui-warning", 13);
+$("cfIc").innerHTML = DBI.icon("md-warn", 32);
+$("ficon").innerHTML = DBI.icon("ft-file", 32);
+let shownName = null, shownSt = null;
+const ST_ICON = { downloading:"st-downloading", queued:"st-queued", paused:"st-paused", completed:"st-completed",
+  failed:"st-failed", scheduled:"st-scheduled", later:"st-later", skipped:"st-skipped" };
+function stopTimers(){ if(timer){clearInterval(timer);timer=null;} if(closeTimer){clearInterval(closeTimer);closeTimer=null;} }
+function closeSelf(){ stopTimers();
+  try { if (window.parent !== window && window.parent.myidmDialogClosed) { window.parent.myidmDialogClosed(); return; } } catch(_) {}
+  if(typeof window.myidmCloseDialog==="function") window.myidmCloseDialog(); else window.close(); }
+// User hit Close/Cancel/Esc: dismiss this window AND its sibling (the completion
+// popup for the same download) by stamping a close time the sibling polls for.
+function closeAll(){ try { api("POST","/api/popups/"+id+"/close",{at:Date.now()}); } catch(_) {} closeSelf(); }
+// The sibling popup closed if its POSTed time is newer than when we opened.
+async function pollClose(){ try { const r = await fetch("/api/popups/"+id+"/close");
+  const d = await r.json(); if ((d.at||0) > openedAt) closeSelf(); } catch(_) {} }
+
+function esc(s){ return String(s).replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]); }
+function infoFor(t, seg){
+  const len = seg.end - seg.start + 1;
+  if (seg.end >= 0 && seg.done >= len) return ['Complete','info-recv'];
+  if (t.status === 'downloading') return [t.note || 'Receiving data…','info-recv'];
+  if (t.status === 'paused') return ['Paused','info-idle'];
+  if (t.status === 'failed') return ['Disconnect.','info-err'];
+  if (t.status === 'queued') return ['Waiting…','info-idle'];
+  return ['—','info-idle'];
+}
+
+function renderSegbar(t){
+  if (!t.size || t.size <= 0 || !(t.segments||[]).length) { $("segbar").innerHTML = ""; return; }
+  let html = "";
+  for (const s of t.segments) {
+    const len = s.end - s.start + 1;
+    const left = (s.start / t.size) * 100, width = (len / t.size) * 100;
+    const fill = Math.min(100, (s.done / len) * 100);
+    html += `<div class="seg" style="left:${left}%;width:${width}%"><div class="fill" style="width:${fill}%"></div></div>`;
+  }
+  $("segbar").innerHTML = html;
+}
+
+async function tick(){
+  let t;
+  try { const r = await fetch("/api/tasks/"+id); if(!r.ok) throw r.status; t = await r.json(); }
+  catch(err) {
+    // 404 = the task was deleted (e.g. cancelled from the main window): stop
+    // polling a dead id forever and gray the controls. Network hiccups (the app
+    // restarting) keep polling and recover on the next tick.
+    if (err === 404) {
+      $("status").textContent = "Task removed"; $("status").className = "v";
+      $("pause").disabled = $("resumeBtn").disabled = $("cancel").disabled = true;
+      if (timer) { clearInterval(timer); timer = null; }
+      const bar = $("pbar"); bar.classList.remove("live"); bar.classList.add("stale");
+    }
+    return;
+  }
+
+  const pct = t.progress >= 0 ? (t.progress*100) : 0;
+  document.title = (t.status==='downloading' ? Math.round(pct)+"% " : "") + (t.fileName || "Download status");
+  $("url").textContent = t.url; $("url").title = t.url;
+  const name = t.fileName || "";
+  if (name !== shownName) {
+    shownName = name;
+    $("fname").textContent = name || "Download status"; $("fname").title = name;
+    $("ficon").innerHTML = DBI.file(name || t.url || "", 32);
+  }
+  const stKey = t.live && t.status === "downloading" ? "st-live" : (ST_ICON[t.status] || "st-queued");
+  if (stKey !== shownSt) { shownSt = stKey; $("stIcon").innerHTML = DBI.icon(stKey, 15); }
+  const stText = ({downloading:"Receiving data…",queued:"Waiting for a slot…",paused:"Paused",
+    completed:"Complete",failed:"Error: "+(t.error||"failed")})[t.status] || t.status;
+  $("status").textContent = stText; $("status").title = stText;
+  $("status").className = "v st-" + t.status;
+  $("errline").classList.toggle("show", t.status === "failed" && !!t.error);
+  $("errText").textContent = t.status === "failed" ? (t.error || "") : ""; $("errText").title = $("errText").textContent;
+  $("size").textContent = t.size>0 ? ((t.sizeEstimated && t.status!=='completed' ? "~" : "") + humanBytes(t.size))
+    : (t.live ? "live stream" : "unknown");
+  $("downloaded").textContent = humanBytes(t.downloaded) + (t.size>0 ? `  ( ${pct.toFixed(2)} % )` : "");
+  $("rate").textContent = t.status==='downloading' ? humanBytes(t.speed)+"/sec" : "—";
+  const rate = (v) => v>0 ? humanBytes(v)+"/s" : "—";
+  $("rateStats").textContent = (t.speedMax>0)
+    ? `${rate(t.speedAvg)}  ·  ${rate(t.speedMax)}  ·  ${rate(t.speedMin)}` : "—";
+  $("rateStats").title = $("rateStats").textContent;
+  $("eta").textContent = t.status==='downloading' ? humanETA(t.eta) : "—";
+  $("resume").textContent = t.ranged ? "Yes" : "No";
+  const bar = $("pbar");
+  bar.style.width = Math.min(100,pct) + "%";
+  bar.classList.toggle("live", t.status==='downloading');
+  bar.classList.toggle("stale", t.status==='paused');
+  bar.classList.toggle("bad", t.status==='failed');
+  $("pct").textContent = (pct >= 100 ? "100" : pct.toFixed(1)) + "%";
+
+  const active = t.status==='downloading' || t.status==='queued';
+  $("pause").disabled = !active;
+  $("resumeBtn").disabled = !(t.status==='paused' || t.status==='failed');
+
+  renderSegbar(t);
+  const segs = t.segments || [];
+  $("nconn").textContent = segs.length ? "(" + segs.length + ")" : "";
+  const mini = (frac, cls) => frac == null ? "" :
+    `<div class="mini ${cls==='info-err'?'err':(cls==='info-idle'?'idle':'')}"><i style="width:${Math.max(0,Math.min(100,frac*100)).toFixed(1)}%"></i></div>`;
+  $("rows").innerHTML = segs.map((s,i)=>{
+    const [info,cls] = infoFor(t,s);
+    const len = s.end - s.start + 1;
+    const frac = s.end >= 0 && len > 0 ? s.done / len : null;
+    return `<tr><td class="n">${i+1}</td><td class="dl">${humanBytes(s.done)}</td><td class="pg">${mini(frac, cls)}</td><td class="inf ${cls}" title="${esc(info)}">${esc(info)}</td></tr>`;
+  }).join("") || `<tr><td class="n">1</td><td class="dl">${humanBytes(t.downloaded)}</td><td class="pg">${t.size>0?mini(pct/100,'info-recv'):""}</td><td class="inf info-recv">Receiving data…</td></tr>`;
+}
+
+$("pause").addEventListener("click", () => api("POST","/api/tasks/"+id+"/pause"));
+$("resumeBtn").addEventListener("click", () => api("POST","/api/tasks/"+id+"/resume"));
+// In-window confirm instead of the browser's "127.0.0.1 says" dialog.
+const cfOpen = () => $("cfWrap").classList.contains("show");
+const cfHide = () => $("cfWrap").classList.remove("show");
+$("cancel").addEventListener("click", () => { $("cfWrap").classList.add("show"); $("cfYes").focus(); });
+$("cfNo").addEventListener("click", cfHide);
+$("cfWrap").addEventListener("click", (e) => { if (e.target === $("cfWrap")) cfHide(); });
+$("cfYes").addEventListener("click", () => { cfHide(); api("DELETE","/api/tasks/"+id+"?file=1"); closeAll(); });
+$("close").addEventListener("click", closeAll);
+// Escape peels one layer: the confirm first, then the window itself.
+document.addEventListener("keydown", (e)=>{ if(e.key==="Escape"){ if(cfOpen()) cfHide(); else closeAll(); } });
+
+tick();
+timer = setInterval(tick, 700);
+closeTimer = setInterval(pollClose, 300);
+</script>
+<script>
+/* Reveal the native window only after first paint (parked off-screen until then
+   by the gui layer) so the status window never flashes white/black on open. */
+(function () {
+  function ready() { try { window.myidmReady && window.myidmReady(); } catch (e) {} }
+  function arm() { requestAnimationFrame(function () { requestAnimationFrame(ready); }); }
+  if (document.readyState === 'loading') addEventListener('DOMContentLoaded', arm);
+  else arm();
+})();
+</script>
+<div id="wsz"><span id="wsz-t"></span><span id="wsz-x" title="Hide — Ctrl+Alt+W to toggle">&#10005;</span></div>
+<style>
+#wsz{position:fixed;right:7px;bottom:7px;z-index:2147483647;background:var(--bg2);color:var(--text);font:600 11px/1.25 "Segoe UI",Tahoma,sans-serif;padding:3px 8px;border:1px solid var(--accent);border-radius:5px;pointer-events:none;white-space:nowrap;letter-spacing:.2px;}
+#wsz-x{pointer-events:auto;cursor:pointer;margin-left:9px;opacity:.6;}
+#wsz-x:hover{opacity:1;}
+</style>
+<script>
+(function(){var N=3,K="dbox.wsz.show";
+var b=document.getElementById("wsz"),t=document.getElementById("wsz-t"),x=document.getElementById("wsz-x");
+function shown(){try{return localStorage.getItem(K)==="1";}catch(e){return false;}}
+function apply(){b.style.display=shown()?"":"none";}
+function dpr(){return Math.round((window.devicePixelRatio||1)*100)/100;}
+function upd(){t.textContent="#"+N+"  "+window.innerWidth+" × "+window.innerHeight+"  · ×"+dpr();}
+function toggle(){try{localStorage.setItem(K,shown()?"0":"1");}catch(e){}apply();}
+x.addEventListener("click",toggle);
+window.addEventListener("resize",upd);
+window.addEventListener("keydown",function(e){if(e.ctrlKey&&e.altKey&&(e.key==="w"||e.key==="W")){e.preventDefault();toggle();}});
+upd();apply();window.__wszToggle=toggle;
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script>
+/* Theme, applied pre-paint. The server stamps <html data-theme="…"> with the
+   saved theme (the popups run in their own WebView2 profile, so localStorage
+   from the main window never reaches them); only without that attribute fall
+   back to the local cache. "graphite"/"slate" are the default: no attribute. */
+(function () {
+  try {
+    var h = document.documentElement;
+    if (h.hasAttribute("data-theme")) return;
+    var t = localStorage.getItem("dbox.ui.theme");
+    if (t && t !== "graphite" && t !== "slate") h.setAttribute("data-theme", t);
+  } catch (e) {}
+})();
+</script>
+<link rel="stylesheet" href="/ui/theme.css">
+<script src="/ui/icons.js"></script>
+<title>Download complete — D BOX</title>
+<style>
+  :root { font-size: 13px; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body { background: var(--bg); color: var(--text); font: 12px/1.4 "Segoe UI", Tahoma, sans-serif;
+    display: flex; flex-direction: column; padding: 11px 12px 10px; -webkit-user-select: none; user-select: none;
+    overflow: hidden; }
+  .head { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; }
+  .head .dbi { animation: pop .35s cubic-bezier(.2,1.4,.5,1) both; }
+  @keyframes pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .ttl { font-size: 13.5px; font-weight: 650; color: var(--text-strong); }
+  .file { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 9px; background: var(--bg2);
+    border: 1px solid var(--border-soft); border-radius: var(--radius-lg); }
+  .file .who { min-width: 0; flex: 1; }
+  .name { font-weight: 600; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta { color: var(--muted); font-size: 11px; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-variant-numeric: tabular-nums; }
+  .actions { display: flex; gap: 6px; margin-top: auto; padding-top: 9px; }
+  .actions .btn { flex: 1; min-width: 0; padding: 6px 8px; gap: 5px; }
+  .foot { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; margin-top: 7px; cursor: pointer; }
+</style>
+</head>
+<body>
+  <div class="head"><span id="okIc"></span><div class="ttl">Download complete</div></div>
+  <div class="file">
+    <span id="ficon"></span>
+    <div class="who">
+      <div class="name" id="name">…</div>
+      <div class="meta" id="meta"></div>
+    </div>
+  </div>
+  <div class="actions">
+    <button class="btn primary" id="open">Open file</button>
+    <button class="btn" id="folder">Open folder</button>
+    <button class="btn" id="close">Close</button>
+  </div>
+  <label class="foot"><input type="checkbox" id="suppress"> Don't show this window for 2 hours</label>
+
+<script>
+const id = new URLSearchParams(location.search).get("id") || "";
+const $ = (s) => document.getElementById(s);
+const openedAt = Date.now();
+let closeTimer = null, filePath = "";
+$("okIc").innerHTML = DBI.icon("md-done", 26);
+$("ficon").innerHTML = DBI.icon("ft-file", 32);
+$("open").insertAdjacentHTML("afterbegin", DBI.icon("ui-open", 14));
+$("folder").insertAdjacentHTML("afterbegin", DBI.icon("ui-folder", 14));
+function humanBytes(n){ if(n==null||n<0)return ""; const u=["B","KB","MB","GB","TB"];let i=0;
+  while(n>=1024&&i<u.length-1){n/=1024;i++;} return n.toFixed(i?1:0)+" "+u[i]; }
+function api(method, path, body){ return fetch(path, { method,
+  headers: body?{"Content-Type":"application/json"}:undefined, body: body?JSON.stringify(body):undefined }); }
+function closeSelf(){
+  if(closeTimer){ clearInterval(closeTimer); closeTimer=null; }
+  // myidmCloseDownload also closes the status window when popups run in-process.
+  if (typeof window.myidmCloseDownload === "function") window.myidmCloseDownload();
+  else if (typeof window.myidmCloseDialog === "function") window.myidmCloseDialog();
+  else window.close();
+}
+function done(){
+  if ($("suppress").checked) api("POST","/api/done-suppress",{seconds:7200});
+  // Closing the completion popup also closes this download's status window. The
+  // hook above covers the shared-window UI; the POST covers the separate-process
+  // popups — the status window polls this stamp and self-closes.
+  try { api("POST","/api/popups/"+id+"/close",{at:Date.now()}); } catch(_) {}
+  closeSelf();
+}
+// Self-close if the status window (our sibling) was closed after we opened.
+async function pollClose(){ try { const r = await fetch("/api/popups/"+id+"/close");
+  const d = await r.json(); if ((d.at||0) > openedAt) closeSelf(); } catch(_) {} }
+async function load(){
+  try {
+    const t = await (await fetch("/api/tasks/"+id)).json();
+    $("name").textContent = t.fileName || "download";
+    $("name").title = t.fileName || "";
+    $("ficon").innerHTML = DBI.file(t.fileName || t.filePath || "", 32);
+    $("meta").textContent = [t.size>0?humanBytes(t.size):"", t.filePath||""].filter(Boolean).join("   ·   ");
+    $("meta").title = t.filePath || "";
+    filePath = t.filePath || "";
+    const can = t.fileExists !== false;
+    $("open").disabled = !can; $("folder").disabled = !can;
+  } catch(_) {}
+}
+$("open").addEventListener("click", () => { api("POST","/api/tasks/"+id+"/open"); done(); });
+$("folder").addEventListener("click", () => {
+  // Spawn Explorer from THIS (foreground) popup so its window comes to the front,
+  // instead of the background server process opening it behind everything.
+  if (typeof window.myidmShowInFolder === "function" && filePath) window.myidmShowInFolder(filePath);
+  else api("POST","/api/tasks/"+id+"/reveal");
+  done();
+});
+$("close").addEventListener("click", done);
+document.addEventListener("keydown", (e)=>{ if(e.key==="Escape") done(); else if(e.key==="Enter") $("open").click(); });
+load();
+closeTimer = setInterval(pollClose, 300);
+</script>
+<script>
+/* Reveal the native window only after first paint (parked off-screen until then
+   by the gui layer) so the popup never flashes white/black on open. */
+(function () {
+  function ready() { try { window.myidmReady && window.myidmReady(); } catch (e) {} }
+  function arm() { requestAnimationFrame(function () { requestAnimationFrame(ready); }); }
+  if (document.readyState === 'loading') addEventListener('DOMContentLoaded', arm);
+  else arm();
+})();
+</script>
+<div id="wsz"><span id="wsz-t"></span><span id="wsz-x" title="Hide — Ctrl+Alt+W to toggle">&#10005;</span></div>
+<style>
+#wsz{position:fixed;right:7px;bottom:7px;z-index:2147483647;background:var(--bg2);color:var(--text);font:600 11px/1.25 "Segoe UI",Tahoma,sans-serif;padding:3px 8px;border:1px solid var(--accent);border-radius:5px;pointer-events:none;white-space:nowrap;letter-spacing:.2px;}
+#wsz-x{pointer-events:auto;cursor:pointer;margin-left:9px;opacity:.6;}
+#wsz-x:hover{opacity:1;}
+</style>
+<script>
+(function(){var N=4,K="dbox.wsz.show";
+var b=document.getElementById("wsz"),t=document.getElementById("wsz-t"),x=document.getElementById("wsz-x");
+function shown(){try{return localStorage.getItem(K)==="1";}catch(e){return false;}}
+function apply(){b.style.display=shown()?"":"none";}
+function dpr(){return Math.round((window.devicePixelRatio||1)*100)/100;}
+function upd(){t.textContent="#"+N+"  "+window.innerWidth+" × "+window.innerHeight+"  · ×"+dpr();}
+function toggle(){try{localStorage.setItem(K,shown()?"0":"1");}catch(e){}apply();}
+x.addEventListener("click",toggle);
+window.addEventListener("resize",upd);
+window.addEventListener("keydown",function(e){if(e.ctrlKey&&e.altKey&&(e.key==="w"||e.key==="W")){e.preventDefault();toggle();}});
+upd();apply();window.__wszToggle=toggle;
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,192 @@
+/* D BOX — shared design tokens + primitives for every window (main list, New
+   Download, status, completion). Served at /ui/theme.css; each page applies the
+   saved theme pre-paint by setting <html data-theme="…"> from localStorage
+   ("dbox.ui.theme"), so this sheet (render-blocking in <head>) paints the right
+   colors on the very first frame.
+
+   Default theme "Slate": a balanced dark — darker than the old gray (kept as
+   "classic") but not black. Keep --bg in sync with the Wails window
+   BackgroundColour (internal/wailsui/wailsui.go) so the window never flashes. */
+
+:root {
+  color-scheme: dark;
+  --bg: #262b32;          /* window chrome: menubar / toolbar / add bar / status bar */
+  --bg2: #2d333b;         /* table header, sidebar title, dropdowns, modals */
+  --panel: #1f2329;       /* list + sidebar surfaces */
+  --panel-2: #323843;     /* raised surfaces / secondary buttons */
+  --field: #1a1e23;       /* text inputs */
+  --hover: #2b3139;
+  --border: #3a414b;
+  --border-soft: #30363f;
+  --grid: #282d34;        /* table gridlines */
+  --text: #e3e7ed;
+  --text-dim: #c0c7d1;    /* secondary chrome text (toolbar labels, headers) */
+  --text-strong: #ffffff;
+  --muted: #8b95a2;
+  --sel: #203f60;         /* selected row */
+  --selbd: #3d78b8;
+  --accent: #5aa7f5;      /* focus rings, links, sorted column */
+  --accent-soft: rgba(90, 167, 245, .16);
+  --brand: #2fcc66;       /* D BOX green (logo) */
+  --pri-a: #34c46a;       /* primary button gradient (brand green) */
+  --pri-b: #1f9d52;
+  --pri-text: #ffffff;
+  --green: #4cc873;
+  --red: #f0716d;
+  --yellow: #e5b547;
+  --orange: #f0923e;
+  --violet: #a78bfa;
+  --blue: #5aa7f5;
+  --grad-a: #2c3139;      /* toolbar gradient */
+  --grad-b: #252a31;
+  --press: #36404c;       /* pressed toolbar button */
+  --strike: #9aa3ae;      /* skipped-row strikethrough */
+  --prog-a: #3fd07a;      /* progress fill */
+  --prog-b: #22a358;
+  --prog-track: #2a3038;
+  --toast-bg: #3a414c;
+  --toast-text: #f2f4f7;
+  --scroll-thumb: #3d444f;
+  --scroll-thumb-hover: #4d5562;
+  --backdrop: rgba(10, 12, 16, .55);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .35);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, .45);
+  --shadow-lg: 0 22px 64px rgba(0, 0, 0, .55), 0 2px 8px rgba(0, 0, 0, .3);
+  --radius: 6px;
+  --radius-lg: 10px;
+}
+
+/* Darker, near-black blue-gray. */
+:root[data-theme=midnight] {
+  --bg: #1a1d23; --bg2: #20242b; --panel: #14171c; --panel-2: #272c34; --field: #111418;
+  --hover: #20252d; --border: #2e343d; --border-soft: #262b33; --grid: #1c2026;
+  --text: #dfe3e8; --text-dim: #b5bec9; --muted: #7f8995;
+  --sel: #1b3552; --selbd: #3a6ea6; --accent: #64a8f0; --accent-soft: rgba(100, 168, 240, .15);
+  --grad-a: #21252c; --grad-b: #1b1e24; --press: #2a313b; --strike: #8d97a3;
+  --prog-track: #1f242b; --toast-bg: #2e343d; --scroll-thumb: #30363f; --scroll-thumb-hover: #3d444e;
+  --backdrop: rgba(0, 0, 0, .6);
+}
+
+:root[data-theme=ocean] {
+  --bg: #1d2c35; --bg2: #22343e; --panel: #16232b; --panel-2: #29414b; --field: #132027;
+  --hover: #243a45; --border: #34505c; --border-soft: #2a414b; --grid: #1f323c;
+  --text: #dcedf2; --text-dim: #b3ccd4; --muted: #86a4ad;
+  --sel: #1d4b5a; --selbd: #3f8ba1; --accent: #4fc3d9; --accent-soft: rgba(79, 195, 217, .16);
+  --pri-a: #2fb0c9; --pri-b: #1f8499;
+  --grad-a: #243e49; --grad-b: #1e333d; --press: #2b5666; --strike: #8fa9b1;
+  --prog-a: #40c9de; --prog-b: #2396ad; --prog-track: #203540;
+  --toast-bg: #2b4450; --scroll-thumb: #33505b; --scroll-thumb-hover: #3f616d;
+}
+
+:root[data-theme=forest] {
+  --bg: #232b24; --bg2: #293229; --panel: #1c231d; --panel-2: #303b31; --field: #171d18;
+  --hover: #2c372d; --border: #3c4a3d; --border-soft: #323d33; --grid: #252e26;
+  --text: #e2e8e0; --text-dim: #c0cbbe; --muted: #93a093;
+  --sel: #2f4f35; --selbd: #5c8f63; --accent: #7cc47f; --accent-soft: rgba(124, 196, 127, .16);
+  --pri-a: #45b05a; --pri-b: #2e8a42;
+  --grad-a: #2b352b; --grad-b: #232b23; --press: #3a4b3a; --strike: #9aa79a;
+  --prog-track: #263026; --toast-bg: #354235; --scroll-thumb: #3a473a; --scroll-thumb-hover: #475747;
+}
+
+/* The previous default gray, for anyone who preferred it. */
+:root[data-theme=classic] {
+  --bg: #3c4043; --bg2: #34383b; --panel: #303336; --panel-2: #44484b; --field: #2a2d2f;
+  --hover: #3f4448; --border: #4e5256; --border-soft: #45494c; --grid: #3c4043;
+  --text: #e6e6e6; --text-dim: #cfd2d4; --muted: #9aa0a4;
+  --sel: #3f5e80; --selbd: #5a82ad; --accent: #6aa6e6; --accent-soft: rgba(106, 166, 230, .16);
+  --pri-a: #3a8ee6; --pri-b: #1f6fd0;
+  --grad-a: #42474b; --grad-b: #383c40; --press: #4a5460; --strike: #aab0b4;
+  --prog-a: #63c272; --prog-b: #3f9e4f; --prog-track: #3a3e41;
+  --toast-bg: #2c2c2c; --scroll-thumb: #55595d; --scroll-thumb-hover: #63676b;
+}
+
+:root[data-theme=light] {
+  color-scheme: light;
+  --bg: #eef0f3; --bg2: #e4e7eb; --panel: #ffffff; --panel-2: #f3f5f7; --field: #ffffff;
+  --hover: #eaf0f7; --border: #cfd5dc; --border-soft: #e1e5ea; --grid: #eceef1;
+  --text: #1f2328; --text-dim: #4a5361; --text-strong: #000000; --muted: #6a7280;
+  --sel: #d4e6fa; --selbd: #7aa9dc; --accent: #1f6fd0; --accent-soft: rgba(31, 111, 208, .12);
+  --pri-a: #2fb760; --pri-b: #1e9449;
+  --green: #1f9d52; --red: #d64541; --yellow: #b7860b; --orange: #d0701c; --violet: #7c5cd6; --blue: #1f6fd0;
+  --grad-a: #f8f9fa; --grad-b: #eceff2; --press: #d5dae1; --strike: #9aa2ac;
+  --prog-a: #3cc774; --prog-b: #22a358; --prog-track: #e6e9ed;
+  --toast-bg: #2b3036; --toast-text: #ffffff;
+  --scroll-thumb: #c5ccd4; --scroll-thumb-hover: #aeb6c0;
+  --backdrop: rgba(20, 24, 30, .35);
+  --shadow-sm: 0 1px 2px rgba(20, 30, 45, .12);
+  --shadow-md: 0 8px 24px rgba(20, 30, 45, .16);
+  --shadow-lg: 0 22px 60px rgba(20, 30, 45, .22), 0 2px 8px rgba(20, 30, 45, .1);
+}
+
+/* ---- primitives shared by every window ---- */
+::selection { background: var(--accent-soft); }
+input::selection, textarea::selection { background: var(--selbd); color: #fff; }
+
+/* Slim, rounded, theme-aware scrollbars (WebView2 / Chromium). */
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 8px;
+  border: 3px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background-color: var(--scroll-thumb-hover); }
+::-webkit-scrollbar-corner { background: transparent; }
+
+input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(--brand); }
+
+/* Icons from /ui/icons.js (DBI.icon → <svg class="dbi">). */
+.dbi { display: inline-block; flex: none; vertical-align: middle; overflow: visible; }
+
+/* Buttons */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 6px 13px; border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text); font: inherit; line-height: 1.2;
+  cursor: pointer; white-space: nowrap;
+  transition: border-color .12s, background-color .12s, filter .12s, box-shadow .12s; }
+.btn:hover { border-color: var(--accent); }
+.btn:active { filter: brightness(.9); }
+.btn:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+.btn.primary { background: linear-gradient(var(--pri-a), var(--pri-b)); border-color: transparent;
+  color: var(--pri-text); font-weight: 600; box-shadow: var(--shadow-sm); }
+.btn.primary:hover { filter: brightness(1.07); border-color: transparent; }
+.btn.primary:disabled { filter: grayscale(.6); }
+.btn.danger { background: linear-gradient(#e0706c, #c0504c); border-color: transparent; color: #fff; font-weight: 600; }
+.btn.danger:hover { filter: brightness(1.07); }
+.btn.ghost { background: transparent; border-color: transparent; }
+.btn.ghost:hover { background: var(--hover); border-color: var(--border); }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible, .btn:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Text inputs / selects */
+.field { padding: 5px 8px; border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--field); color: var(--text); font: inherit; outline: none;
+  transition: border-color .12s, box-shadow .12s; }
+.field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.field::placeholder { color: var(--muted); }
+
+/* Filter chips (Link Grabber) */
+.chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text-dim);
+  font-size: 11.5px; cursor: pointer; white-space: nowrap; transition: border-color .12s, background-color .12s; }
+.chip:hover { border-color: var(--accent); }
+.chip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+.chip .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* Spinner (resolving / scanning) */
+.spinner { display: inline-block; width: 12px; height: 12px; border-radius: 50%; flex: none;
+  border: 2px solid var(--border); border-top-color: var(--accent); animation: dbi-spin .8s linear infinite;
+  vertical-align: middle; }
+@keyframes dbi-spin { to { transform: rotate(360deg); } }
+
+/* Inline progress pill (table Status column, grabber rows) */
+.pill { position: relative; height: 15px; border-radius: 8px; background: var(--prog-track);
+  overflow: hidden; font-size: 10.5px; font-weight: 600; line-height: 15px; text-align: center;
+  font-variant-numeric: tabular-nums; color: var(--text); }
+.pill > .fill { position: absolute; inset: 0 auto 0 0; border-radius: 8px;
+  background: linear-gradient(90deg, var(--prog-b), var(--prog-a)); transition: width .4s ease; }
+.pill.paused > .fill { background: linear-gradient(90deg, #6b7480, #8b95a2); }
+.pill.failed > .fill { background: linear-gradient(90deg, #b44a47, var(--red)); }
+.pill > span { position: relative; text-shadow: 0 1px 1px rgba(0, 0, 0, .45); color: #fff; }
+.pill.empty > span { color: var(--text-dim); text-shadow: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
